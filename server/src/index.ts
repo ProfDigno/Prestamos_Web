@@ -214,7 +214,7 @@ app.post('/api/cuotas/:id/notificar', asyncRoute(async (req, res) => {
       `Total a pagar: ${formatGuarani(pending)}`,
       `Saldo de la operación: ${formatGuarani(q.operacion_total)}`
     ].join('\n');
-    return { idcuota: q.idcuota, idoperacion_financiera: q.fk_idoperacion_financiera, fecha_notificado: notifiedAt, notificado_hoy: true, cliente: q.nombre_completo, telefono1: q.telefono1, monto_interes_pendiente: interest.toFixed(2), monto_capital_pendiente: capital.toFixed(2), monto_pendiente: pending.toFixed(2), texto_whatsapp: texto, whatsapp_url: `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(texto)}` };
+    return { idcuota: q.idcuota, idoperacion_financiera: q.fk_idoperacion_financiera, fecha_notificado: notifiedAt, notificado_hoy: true, cliente: q.nombre_completo, telefono1: q.telefono1, telefono_whatsapp: phone, monto_interes_pendiente: interest.toFixed(2), monto_capital_pendiente: capital.toFixed(2), monto_pendiente: pending.toFixed(2), texto_whatsapp: texto, whatsapp_url: `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(texto)}` };
   });
   res.json(result);
 }));
@@ -405,7 +405,7 @@ app.post('/api/operaciones/:id/pagos',requirePermission('PAGO_CREAR'),asyncRoute
       JOIN forma_pago fp ON fp.idforma_pago=p.fk_idforma_pago JOIN operacion_financiera o ON o.idoperacion_financiera=p.fk_idoperacion_financiera WHERE p.idpago=$1`,[id])).rows[0];
   const totalAplicado=new Decimal(summary.interes_aplicado).plus(summary.capital_aplicado);const totalPagado=new Decimal(summary.total_pagado);const saldo=new Decimal(summary.monto_total).minus(totalPagado).minus(summary.descuento_aplicado);const concepto=Number(summary.descuento_aplicado)>0?'LIQUIDACIÓN CON DESCUENTO':Number(summary.capital_aplicado)===0?'PAGO DE INTERESES':'PAGO DE CUOTA';
   const phone=normalizeWhatsApp(summary.telefono1);const texto=[`PRÉSTAMOS CDE`,`COMPROBANTE DE PAGO #${summary.idpago}`,`Propietario: ${summary.propietario??'Préstamos CDE'}`,`Cliente: ${summary.nombre_completo}`,`C.I.: ${summary.cedula}`,`Fecha: ${DateTime.fromJSDate(summary.fecha_pago).toFormat('dd/MM/yyyy HH:mm')}`,`Forma de pago: ${summary.forma_pago}`,`Concepto: ${concepto}`,`Monto recibido: ${formatGuarani(summary.monto)}`,`Total pagado: ${formatGuarani(totalPagado)}`,...(Number(summary.descuento_aplicado)>0?[`Descuento aplicado: ${formatGuarani(summary.descuento_aplicado)}`]:[]),`Saldo restante: ${formatGuarani(saldo)}`,'Firma: ____________________'].join('\n');
-  res.status(201).json({idpago:id,resumen:{...summary,saldo:saldo.toFixed(2),texto_whatsapp:texto,whatsapp_url:phone?`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(texto)}`:null}});
+  res.status(201).json({idpago:id,resumen:{...summary,saldo:saldo.toFixed(2),telefono_whatsapp:phone,texto_whatsapp:texto,whatsapp_url:phone?`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(texto)}`:null}});
 }));
 
 

@@ -33,6 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { api, money, shortDate } from "./api";
+import { openWhatsApp } from "./whatsapp";
 import EditClient from "./EditClient";
 import OperationDetailSelectable from "./OperationDetailSelectable";
 
@@ -458,8 +459,11 @@ function CalendarView() {
       const result = await api<any>(`/api/cuotas/${notify.idcuota}/notificar`, {
         method: "POST",
       });
-      if (popup) popup.location.href = result.whatsapp_url;
-      else window.open(result.whatsapp_url, "_blank");
+      openWhatsApp(
+        result.telefono_whatsapp ?? result.telefono1,
+        result.texto_whatsapp,
+        popup,
+      );
       setNotify(null);
       await load();
     } catch (e) {

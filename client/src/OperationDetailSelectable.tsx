@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FileText, MessageCircle } from "lucide-react";
 import { api, money, shortDate } from "./api";
+import { openWhatsApp } from "./whatsapp";
 
 export default function OperationDetailSelectable() {
   const { id } = useParams();
@@ -107,9 +108,15 @@ export default function OperationDetailSelectable() {
           popup.location.href = "/api/pagos/" + r.idpago + "/comprobante.pdf";
         else
           window.open("/api/pagos/" + r.idpago + "/comprobante.pdf", "_blank");
-      } else if (r.resumen?.whatsapp_url) {
-        if (popup) popup.location.href = r.resumen.whatsapp_url;
-        else window.open(r.resumen.whatsapp_url, "_blank");
+      } else if (
+        r.resumen?.telefono_whatsapp &&
+        r.resumen?.texto_whatsapp
+      ) {
+        openWhatsApp(
+          r.resumen.telefono_whatsapp,
+          r.resumen.texto_whatsapp,
+          popup,
+        );
       } else {
         if (popup) popup.close();
         setError(
@@ -142,11 +149,6 @@ export default function OperationDetailSelectable() {
       setReceipt(null);
       return;
     }
-    let phone = String(data.telefono1 || "").replace(/\D/g, "");
-    if (phone.startsWith("00")) phone = phone.slice(2);
-    if (phone.startsWith("0")) phone = "595" + phone.slice(1);
-    else if (!phone.startsWith("595") && phone.length === 9)
-      phone = "595" + phone;
     const text = [
       "PRÉSTAMOS CDE",
       "COMPROBANTE DE PAGO #" + receipt.idpago,
@@ -157,18 +159,11 @@ export default function OperationDetailSelectable() {
       "Monto recibido: " + amount,
       "Saldo restante: " + money(data.saldo),
     ].join("\n");
-    if (phone.length < 11) {
+    if (!openWhatsApp(data.telefono1, text)) {
       setError("El cliente no tiene un teléfono válido para WhatsApp");
       setReceipt(null);
       return;
     }
-    window.open(
-      "https://web.whatsapp.com/send?phone=" +
-        phone +
-        "&text=" +
-        encodeURIComponent(text),
-      "_blank",
-    );
     setReceipt(null);
   }
   if (!data)

@@ -8,3 +8,5 @@ storage/certs/*.key
 storage/certs/*.crt
 coverage/
 .vite/
+Servidor.txt
+*.tsbuildinfo
