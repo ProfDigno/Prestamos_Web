@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.log
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/certs/*.key
+storage/certs/*.crt
+coverage/
+.vite/
