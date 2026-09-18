@@ -35,6 +35,7 @@ export default function EditClient() {
   const [types, setTypes] = useState<any[]>([]);
   const [mapKey, setMapKey] = useState("");
   const [error, setError] = useState("");
+  const [additionalOpen, setAdditionalOpen] = useState(false);
   const [cedulaFile, setCedulaFile] = useState<File | null>(null);
   const [cedulaBackFile, setCedulaBackFile] = useState<File | null>(null);
   useEffect(() => {
@@ -88,10 +89,10 @@ export default function EditClient() {
           tasa_interes_sugerida: data.tasa_interes_sugerida || null,
         }),
       });
-      if (data.referencias?.length === 2)
+      if (data.referencias?.length >= 1)
         await api(`/api/clientes/${id}/referencias`, {
           method: "PATCH",
-          body: JSON.stringify({ referencias: data.referencias }),
+          body: JSON.stringify({ referencias: [data.referencias[0]] }),
         });
       if (cedulaFile) {
         const form = new FormData();
@@ -148,13 +149,6 @@ export default function EditClient() {
           />
         </label>
         <label>
-          RUC
-          <input
-            value={data.ruc || ""}
-            onChange={(e) => set("ruc", e.target.value)}
-          />
-        </label>
-        <label>
           Dirección
           <input
             required
@@ -170,45 +164,35 @@ export default function EditClient() {
             onChange={(e) => set("telefono1", e.target.value)}
           />
         </label>
-        <label>
-          Teléfono 2
-          <input
-            value={data.telefono2 || ""}
-            onChange={(e) => set("telefono2", e.target.value)}
-          />
-        </label>
-        <label>
-          Email
-          <input
-            type="email"
-            value={data.email || ""}
-            onChange={(e) => set("email", e.target.value)}
-          />
-        </label>
-        <label>
-          Profesión
-          <input
-            value={data.profesion || ""}
-            onChange={(e) => set("profesion", e.target.value)}
-          />
-        </label>
-        <label>
-          Dedicación
-          <input
-            value={data.dedicacion || ""}
-            onChange={(e) => set("dedicacion", e.target.value)}
-          />
-        </label>
-        <label>
-          Ingreso promedio
-          <input
-            inputMode="decimal"
-            value={data.ingreso_promedio || ""}
-            onChange={(e) =>
-              set("ingreso_promedio", e.target.value.replace(/[^0-9.]/g, ""))
-            }
-          />
-        </label>
+        <button type="button" className="button secondary full additional-toggle" onClick={() => setAdditionalOpen((open) => !open)}>
+          {additionalOpen ? "Ocultar datos adicional" : "Datos adicional"}
+        </button>
+        {additionalOpen && <div className="full additional-fields">
+          <label>
+            RUC
+            <input value={data.ruc || ""} onChange={(e) => set("ruc", e.target.value)} />
+          </label>
+          <label>
+            Teléfono 2
+            <input value={data.telefono2 || ""} onChange={(e) => set("telefono2", e.target.value)} />
+          </label>
+          <label>
+            Email
+            <input type="email" value={data.email || ""} onChange={(e) => set("email", e.target.value)} />
+          </label>
+          <label>
+            Profesión
+            <input value={data.profesion || ""} onChange={(e) => set("profesion", e.target.value)} />
+          </label>
+          <label>
+            Dedicación
+            <input value={data.dedicacion || ""} onChange={(e) => set("dedicacion", e.target.value)} />
+          </label>
+          <label>
+            Ingreso promedio
+            <input inputMode="decimal" value={data.ingreso_promedio || ""} onChange={(e) => set("ingreso_promedio", e.target.value.replace(/[^0-9.]/g, ""))} />
+          </label>
+        </div>}
         <label>
           Interés sugerido (%)
           <input
@@ -255,6 +239,7 @@ export default function EditClient() {
             Actualizar ubicación GPS
           </button>
         </div>
+        {additionalOpen && <div className="full additional-fields">
         <fieldset className="full employer-box">
           <legend>Datos de la empresa</legend>
           <div className="form-grid nested-grid">
@@ -290,7 +275,7 @@ export default function EditClient() {
         </fieldset>
         <section className="full panel">
           <h2>Referencias</h2>
-          {(data.referencias || []).map((r: any, i: number) => (
+          {(data.referencias || []).slice(0, 1).map((r: any, i: number) => (
             <div className="reference" key={r.idcliente_referencia || i}>
               <strong>Referencia {i + 1}</strong>
               <input
@@ -369,6 +354,7 @@ export default function EditClient() {
             onChange={(e) => set("observacion", e.target.value)}
           />
         </label>
+        </div>}
         {error && <div className="alert error full">{error}</div>}
         <div className="form-actions full">
           <button

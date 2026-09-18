@@ -8,15 +8,14 @@ export default function OperationDetailSelectable() {
   const { id } = useParams();
   const [data, setData] = useState<any>();
   const [forms, setForms] = useState<any[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
   const [amount, setAmount] = useState("");
   const [form, setForm] = useState("");
   const [error, setError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<"TOTAL" | "INTERES">("TOTAL");
-  const [discount, setDiscount] = useState("");
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<"CUOTAS" | "PAGOS">("CUOTAS");
+  const [expandedPayment, setExpandedPayment] = useState<number | null>(null);
   const load = () => api<any>(`/api/operaciones/${id}`).then(setData);
   useEffect(() => {
     load();
@@ -25,84 +24,35 @@ export default function OperationDetailSelectable() {
       if (r[0]) setForm(String(r[0].idforma_pago));
     });
   }, [id]);
-  const selectedTotal = useMemo(
-    () =>
-      data?.cuotas
-        ?.filter((q: any) => selected.includes(q.idcuota))
-        .reduce(
-          (s: number, q: any) =>
-            s +
-            Number(q.monto_total) -
-            Number(q.interes_pagado || 0) -
-            Number(q.capital_pagado || 0),
-          0,
-        ) || 0,
-    [data, selected],
-  );
-  const interestTotal = useMemo(
-    () =>
-      data?.cuotas
-        ?.filter((q: any) => selected.includes(q.idcuota))
-        .reduce(
-          (s: number, q: any) =>
-            s + Number(q.monto_interes) - Number(q.interes_pagado || 0),
-          0,
-        ) || 0,
-    [data, selected],
-  );
-  const selectedCapital = useMemo(
-    () =>
-      data?.cuotas
-        ?.filter((q: any) => selected.includes(q.idcuota))
-        .reduce(
-          (s: number, q: any) =>
-            s + Number(q.monto_capital) - Number(q.capital_pagado || 0),
-          0,
-        ) || 0,
-    [data, selected],
-  );
-  const canDiscount =
-    selected.length > 0 &&
-    paymentMode === "TOTAL" &&
-    Math.abs(selectedTotal - Number(data?.saldo || 0)) < 0.01;
-  function toggle(q: any) {
-    if (q.estado === "PAGADA" || q.estado === "ANULADA") return;
-    setDiscount("");
-    setSelected((v) =>
-      v.includes(q.idcuota)
-        ? v.filter((x) => x !== q.idcuota)
-        : [...v, q.idcuota],
-    );
-  }
-  async function confirmPay(destination: "PDF" | "WHATSAPP") {
+  const paymentPreview = useMemo(() => {
+    let remaining = Number(amount || 0);
+    const result: { numero: number; monto: number }[] = [];
+    for (const q of data?.cuotas ?? []) {
+      if (remaining <= 0) break;
+      const due = Number(q.saldo_pendiente ?? 0);
+      if (due <= 0) continue;
+      const applied = Math.min(remaining, due);
+      result.push({ numero: q.numero, monto: applied });
+      remaining -= applied;
+    }
+    return result;
+  }, [amount, data]);
+  async function confirmPay(destination: "PDF" | "WHATSAPP" | "NONE") {
     if (processing) return;
-    const popup = window.open("about:blank", "_blank");
+    const popup = destination === "NONE" ? null : window.open("about:blank", "_blank");
     setProcessing(true);
     try {
-      const body = selected.length
-        ? {
-            cuota_ids: selected,
-            modo: paymentMode,
-            monto:
-              paymentMode === "INTERES"
-                ? interestTotal.toFixed(2)
-                : discount
-                  ? (selectedTotal - Number(discount)).toFixed(2)
-                  : undefined,
-            descuento_general: discount ? String(discount) : undefined,
-            fk_idforma_pago: Number(form),
-          }
-        : { monto: amount, fk_idforma_pago: Number(form) };
+      const body = { monto: amount, fk_idforma_pago: Number(form) };
       const r = await api<any>("/api/operaciones/" + id + "/pagos", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      setSelected([]);
       setAmount("");
-      setDiscount("");
       setError("");
-      setPaymentMode("TOTAL");
       await load();
+      if (destination === "NONE") {
+        return;
+      }
       if (destination === "PDF") {
         if (popup)
           popup.location.href = "/api/pagos/" + r.idpago + "/comprobante.pdf";
@@ -131,11 +81,15 @@ export default function OperationDetailSelectable() {
     }
   }
   function pay() {
-    setPaymentMode("TOTAL");
-    setConfirmOpen(true);
-  }
-  function payInterest() {
-    setPaymentMode("INTERES");
+    if (!amount || Number(amount) <= 0) {
+      setError("Ingrese un monto válido para registrar el pago.");
+      return;
+    }
+    if (Number(amount) > Number(data?.saldo || 0)) {
+      setError(`El monto supera el saldo pendiente de ${money(data?.saldo)}.`);
+      return;
+    }
+    setError("");
     setConfirmOpen(true);
   }
   function openReceipt(destination: "PDF" | "WHATSAPP") {
@@ -166,6 +120,11 @@ export default function OperationDetailSelectable() {
     }
     setReceipt(null);
   }
+  const paymentDateTime = (value: string) =>
+    new Intl.DateTimeFormat("es-PY", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date(value));
   if (!data)
     return (
       <main className="page">
@@ -189,10 +148,14 @@ export default function OperationDetailSelectable() {
           )}
         </div>
       </div>
-      <section className="metrics-grid four">
+      <section className="metrics-grid five">
         <article className="metric">
           <span>Prestado</span>
           <strong>{money(data.monto_capital)}</strong>
+        </article>
+        <article className="metric interest">
+          <span>Interés</span>
+          <strong>{money(data.monto_interes)} / {data.porcentaje_interes}%</strong>
         </article>
         <article className="metric">
           <span>Total a cobrar</span>
@@ -209,124 +172,80 @@ export default function OperationDetailSelectable() {
       </section>
       <div className="detail-grid">
         <section className="panel schedule-panel">
-          <div className="section-head">
-            <div>
-              <p className="eyebrow">CRONOGRAMA</p>
-              <h2>Plan de cuotas</h2>
-              {selected.length > 0 && (
-                <p className="selection-total">
-                  {selected.length} cuota(s) seleccionada(s) ·{" "}
-                  <strong>{money(selectedTotal)}</strong>
-                </p>
-              )}
-            </div>
-            <div className="pay-box">
-              <input
-                placeholder="Monto a cobrar"
-                inputMode="numeric"
-                value={
-                  selected.length
-                    ? String(
-                        Math.round(
-                          paymentMode === "INTERES"
-                            ? interestTotal
-                            : Math.max(
-                                0,
-                                selectedTotal - Number(discount || 0),
-                              ),
-                        ),
-                      )
-                    : amount
-                }
-                disabled={selected.length > 0}
-                onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-              />
-              <select value={form} onChange={(e) => setForm(e.target.value)}>
-                {forms.map((f) => (
-                  <option key={f.idforma_pago} value={f.idforma_pago}>
-                    {f.nombre}
-                  </option>
-                ))}
-              </select>
-              {canDiscount && (
-                <input
-                  placeholder="Descuento general"
-                  inputMode="numeric"
-                  value={discount}
-                  onChange={(e) =>
-                    setDiscount(e.target.value.replace(/\D/g, ""))
-                  }
-                />
-              )}
-              <button
-                className="button success"
-                disabled={
-                  (!selected.length && !amount) || data.estado === "PAGADA"
-                }
-                onClick={pay}
-              >
-                Registrar pago
-              </button>
-              <button
-                className="button secondary"
-                disabled={!selected.length || data.estado === "PAGADA"}
-                onClick={payInterest}
-              >
-                Solo interés
-              </button>
-            </div>
+          <div className="detail-tabs" role="tablist">
+            <button className={activeTab === "CUOTAS" ? "active" : ""} onClick={() => setActiveTab("CUOTAS")}>Cuotas</button>
+            <button className={activeTab === "PAGOS" ? "active" : ""} onClick={() => setActiveTab("PAGOS")}>Pagos <span>{data.pagos.length}</span></button>
           </div>
-          {error && <div className="alert error">{error}</div>}
-          <div className="installments">
-            <div className="installment header">
-              <span>Sel.</span>
-              <span>#</span>
-              <span>Vencimiento</span>
-              <span>Interés</span>
-              <span>Capital</span>
-              <span>Total</span>
-              <span>Estado</span>
-            </div>
-            {data.cuotas.map((q: any) => (
-              <div
-                className={`installment ${q.estado === "PAGADA" ? "paid-row" : ""}`}
-                key={q.idcuota}
-              >
-                <span>
+          {activeTab === "CUOTAS" ? (
+            <>
+              <div className="section-head tab-content-head">
+                <div>
+                  <p className="eyebrow">CRONOGRAMA</p>
+                  <h2>Plan de cuotas</h2>
+                </div>
+                <div className="pay-box">
                   <input
-                    type="checkbox"
-                    checked={selected.includes(q.idcuota)}
-                    disabled={q.estado === "PAGADA" || q.estado === "ANULADA"}
-                    onChange={() => toggle(q)}
+                    aria-label="Monto a cobrar"
+                    placeholder="Monto a cobrar"
+                    inputMode="numeric"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
                   />
-                </span>
-                <span>
-                  {q.numero}/{data.cantidad_cuotas}
-                </span>
-                <span>{shortDate(q.fecha_vencimiento)}</span>
-                <span>
-                  {money(q.monto_interes)}
-                  {q.fecha_pago_interes && (
-                    <small className="paid-date">
-                      Pagado: {shortDate(q.fecha_pago_interes)}
-                    </small>
-                  )}
-                </span>
-                <span>{money(q.monto_capital)}</span>
-                <strong>{money(q.monto_total)}</strong>
-                <span>
-                  <span className={`badge ${q.estado.toLowerCase()}`}>
-                    {q.estado}
-                  </span>
-                  {q.fecha_pago && (
-                    <small className="paid-date">
-                      Pagada: {shortDate(q.fecha_pago)}
-                    </small>
-                  )}
-                </span>
+                  <select aria-label="Forma de pago" value={form} onChange={(e) => setForm(e.target.value)}>
+                    {forms.map((f) => <option key={f.idforma_pago} value={f.idforma_pago}>{f.nombre}</option>)}
+                  </select>
+                  <button className="button success" disabled={!amount || data.estado === "PAGADA"} onClick={pay}>Registrar pago</button>
+                </div>
               </div>
-            ))}
-          </div>
+              {error && <div className="alert error">{error}</div>}
+              <div className="installments">
+                <div className="installment header">
+                  <span>#</span><span>Vencimiento</span><span>Interés / Capital</span><span>Total</span><span>Pagado</span><span>Saldo</span><span>Estado</span>
+                </div>
+                {data.cuotas.map((q: any) => (
+                  <div className={`installment ${q.estado === "PAGADA" ? "paid-row" : ""}`} key={q.idcuota}>
+                    <span>{q.numero}/{data.cantidad_cuotas}</span>
+                    <span>{shortDate(q.fecha_vencimiento)}</span>
+                    <span className="amount-stack"><span>{money(q.monto_interes)}</span><span>{money(q.monto_capital)}</span>{q.fecha_pago_interes && <small className="paid-date">Interés cubierto: {shortDate(q.fecha_pago_interes)}</small>}</span>
+                    <strong>{money(q.monto_total)}</strong>
+                    <span className="paid-amount">{money(q.monto_pagado)}</span>
+                    <strong className={Number(q.saldo_pendiente) > 0 ? "pending-amount" : "green-text"}>{money(q.saldo_pendiente)}</strong>
+                    <span><span className={`badge ${q.estado.toLowerCase()}`}>{q.estado}</span>{q.fecha_pago && <small className="paid-date">Pagada: {shortDate(q.fecha_pago)}</small>}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="payments-tab">
+              <div className="tab-content-head">
+                <p className="eyebrow">HISTORIAL</p>
+                <h2>Pagos registrados</h2>
+              </div>
+              {data.pagos.length === 0 ? <div className="empty">Todavía no hay pagos registrados.</div> : (
+                <div className="payments-table">
+                  <div className="payment-row header"><span>Comprobante</span><span>Fecha</span><span>Forma</span><span>Monto</span><span>Estado</span><span>Acciones</span></div>
+                  {data.pagos.map((p: any) => (
+                    <div className="payment-group" key={p.idpago}>
+                      <div className="payment-row">
+                        <button className="payment-expand" onClick={() => setExpandedPayment(expandedPayment === p.idpago ? null : p.idpago)} aria-expanded={expandedPayment === p.idpago}>#{p.idpago} <span>{expandedPayment === p.idpago ? "−" : "+"}</span></button>
+                        <span>{paymentDateTime(p.fecha_pago)}</span>
+                        <span>{p.forma_pago}</span>
+                        <strong>{money(p.monto)}</strong>
+                        <span><span className={`badge ${p.estado.toLowerCase()}`}>{p.estado}</span></span>
+                        <span className="payment-actions"><button className="button secondary" onClick={() => window.open(`/api/pagos/${p.idpago}/comprobante.pdf`, "_blank")}>PDF</button><button className="button whatsapp" onClick={() => setReceipt(p)}>WhatsApp</button></span>
+                      </div>
+                      {expandedPayment === p.idpago && (
+                        <div className="payment-detail">
+                          <div className="payment-detail-row header"><span>Cuota</span><span>Interés / Capital</span><span>Total aplicado</span></div>
+                          {p.aplicaciones.length ? p.aplicaciones.map((a: any) => <div className="payment-detail-row" key={`${p.idpago}-${a.idcuota}`}><span>Cuota {a.numero}</span><span className="amount-stack"><span>{money(a.monto_interes)}</span><span>{money(a.monto_capital)}</span></span><strong>{money(a.monto_total)}</strong></div>) : <p className="muted">Este pago no tiene aplicaciones activas.</p>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </section>
         <aside className="panel data-panel">
           <p className="eyebrow">DATOS</p>
@@ -371,15 +290,6 @@ export default function OperationDetailSelectable() {
               </dl>
             </section>
           )}
-          {data.pagos.map((p: any) => (
-            <button
-              key={p.idpago}
-              className="button secondary wide"
-              onClick={() => setReceipt(p)}
-            >
-              Comprobante #{p.idpago}
-            </button>
-          ))}
           <div className="account-actions">
             <a
               className="button primary wide"
@@ -442,30 +352,14 @@ export default function OperationDetailSelectable() {
             <p className="eyebrow">CONFIRMAR COBRO</p>
             <h2>¿Confirmar este pago?</h2>
             <p>
-              {paymentMode === "INTERES"
-                ? "Se cobrará únicamente el interés pendiente de "
-                : discount
-                  ? "Se registrará una liquidación de "
-                  : "Se registrará un pago de "}
-              <strong>
-                {money(
-                  selected.length
-                    ? paymentMode === "INTERES"
-                      ? interestTotal
-                      : discount
-                        ? Math.max(0, selectedTotal - Number(discount))
-                        : selectedTotal
-                    : amount,
-                )}
-              </strong>
-              {discount
-                ? ` sobre ${money(selectedTotal)}. Descuento aplicado: ${money(discount)}. Saldo restante: Gs. 0.`
-                : paymentMode === "INTERES"
-                  ? ` de ${selected.length} cuota(s). Capital pendiente: ${money(selectedCapital)}.`
-                  : selected.length > 0
-                    ? ` correspondiente a ${selected.length} cuota(s) seleccionada(s).`
-                    : " como pago libre."}
+              Se registrará un pago de <strong>{money(amount)}</strong> distribuido desde la cuota pendiente más antigua.
             </p>
+            {paymentPreview.length > 0 && (
+              <div className="allocation-preview">
+                <strong>Aplicación estimada</strong>
+                {paymentPreview.map((item) => <span key={item.numero}>Cuota {item.numero}: {money(item.monto)}</span>)}
+              </div>
+            )}
             <div className="modal-actions">
               <button
                 className="button secondary"
@@ -473,6 +367,13 @@ export default function OperationDetailSelectable() {
                 onClick={() => setConfirmOpen(false)}
               >
                 Cancelar
+              </button>
+              <button
+                className="button primary"
+                disabled={processing}
+                onClick={() => confirmPay("NONE")}
+              >
+                Pagar
               </button>
               <button
                 className="button success"

@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/editclient.tsx","./src/operationdetailselectable.tsx","./src/api.test.ts","./src/api.ts","./src/main.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/editclient.tsx","./src/operationdetailselectable.tsx","./src/api.test.ts","./src/api.ts","./src/imageutils.ts","./src/loanpreview.test.ts","./src/loanpreview.ts","./src/main.tsx","./src/whatsapp.ts"],"version":"5.9.3"}

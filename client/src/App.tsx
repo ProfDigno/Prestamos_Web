@@ -10,6 +10,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from "react-router-dom";
@@ -20,6 +21,7 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   CircleDollarSign,
   LayoutDashboard,
   LogOut,
@@ -32,8 +34,24 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
+import {
+  Bar,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  Legend,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { optimizeCedulaImage } from "./imageUtils";
 import { api, money, shortDate } from "./api";
 import { openWhatsApp } from "./whatsapp";
+import { calculatePreviewInstallments } from "./loanPreview";
 import EditClient from "./EditClient";
 import OperationDetailSelectable from "./OperationDetailSelectable";
 
@@ -46,9 +64,38 @@ type User = {
 };
 type Notice = { type: "ok" | "error"; text: string } | null;
 
+function ageFromBirth(value: string | null | undefined) {
+  if (!value) return "—";
+  const birth = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(birth.getTime())) return "—";
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const beforeBirthday =
+    now.getMonth() < birth.getMonth() ||
+    (now.getMonth() === birth.getMonth() && now.getDate() < birth.getDate());
+  if (beforeBirthday) age -= 1;
+  return age >= 0 ? `${age} años` : "—";
+}
+
+function normalizeDecimalInput(value: string, maxDecimals = 4) {
+  if (value.trim().startsWith("-")) return "";
+  const normalized = value.replace(/,/g, ".").replace(/[^\d.]/g, "");
+  const [integer = "", ...fractionParts] = normalized.split(".");
+  if (!fractionParts.length) return integer;
+  return `${integer || "0"}.${fractionParts.join("").slice(0, maxDecimals)}`;
+}
+
+function roundedAmount(value: number) {
+  return Number.isFinite(value) ? (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2) : "";
+}
+
+function roundedPercentage(value: number) {
+  return Number.isFinite(value) ? (Math.round((value + Number.EPSILON) * 10000) / 10000).toString() : "";
+}
+
 function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [login, setLogin] = useState("admin@prestamos.local");
-  const [password, setPassword] = useState("Prestamo2026!");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent) {
@@ -102,7 +149,6 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
             {busy ? "Ingresando…" : "Iniciar sesión"}
           </button>
         </form>
-        <p className="login-hint">Acceso demo: admin@prestamos.local</p>
       </section>
     </main>
   );
@@ -118,7 +164,6 @@ const nav = [
   ["/productos", "Producto", Boxes],
   ["/caja", "Caja diaria", CalendarDays],
   ["/gastos", "Gastos", ReceiptText],
-  ["/administracion", "Administración", Settings],
 ] as const;
 function Shell({
   user,
@@ -130,6 +175,12 @@ function Shell({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const location = useLocation();
+  const administrationPath = location.pathname.startsWith("/administracion");
+  useEffect(() => {
+    if (administrationPath) setAdminOpen(true);
+  }, [administrationPath]);
   return (
     <div className="app-shell">
       <aside className={open ? "sidebar open" : "sidebar"}>
@@ -157,6 +208,22 @@ function Shell({
               <span>{label}</span>
             </NavLink>
           ))}
+          <div className={`nav-group ${administrationPath ? "active" : ""}`}>
+            <div className="nav-parent-row">
+              <NavLink to="/administracion" end onClick={() => setOpen(false)}>
+                <Settings />
+                <span>Administración</span>
+              </NavLink>
+              <button className="nav-expander" type="button" aria-label="Mostrar submenú de administración" aria-expanded={adminOpen} onClick={() => setAdminOpen((value) => !value)}>
+                <ChevronDown className={adminOpen ? "rotated" : ""} />
+              </button>
+            </div>
+            {adminOpen && <div className="nav-submenu">
+              <NavLink to="/administracion/usuarios" onClick={() => setOpen(false)}><Users /><span>Usuarios</span></NavLink>
+              <NavLink to="/administracion/roles" onClick={() => setOpen(false)}><ShieldCheck /><span>Roles</span></NavLink>
+              <NavLink to="/administracion/eventos" onClick={() => setOpen(false)}><Settings /><span>Eventos</span></NavLink>
+            </div>}
+          </div>
         </nav>
         <div className="sidebar-user">
           <div className="avatar">{user.nombre.charAt(0)}</div>
@@ -240,67 +307,155 @@ function NoticeBar({ notice }: { notice: Notice }) {
   ) : null;
 }
 
+const CHART_COLORS = ["#4f91c7", "#24c784", "#f4c542", "#a979e8", "#ef5966", "#57c7d4"];
+
+function localIsoDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function defaultDashboardRange() {
+  const now = new Date();
+  return { desde: localIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)), hasta: localIsoDate(now) };
+}
+
+function chartDate(value: string) {
+  return new Intl.DateTimeFormat("es-PY", { day: "2-digit", month: "2-digit" }).format(new Date(`${value}T12:00:00`));
+}
+
+function compactNumber(value: unknown) {
+  return new Intl.NumberFormat("es-PY", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value ?? 0));
+}
+
+function percent(value: unknown) {
+  return `${Number(value ?? 0).toFixed(2)}%`;
+}
+
 function Dashboard() {
+  const initialRange = useMemo(defaultDashboardRange, []);
+  const [filters, setFilters] = useState(initialRange);
+  const [applied, setApplied] = useState(initialRange);
   const [data, setData] = useState<any>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   useEffect(() => {
-    api("/api/dashboard").then(setData);
-  }, []);
-  if (!data)
-    return (
-      <Page title="Dashboard" subtitle="Resumen general de tu cartera">
-        <Loading />
-      </Page>
-    );
+    let active = true;
+    setLoading(true);
+    setError("");
+    api<any>(`/api/dashboard?desde=${applied.desde}&hasta=${applied.hasta}`)
+      .then((result) => { if (active) setData(result); })
+      .catch((reason) => { if (active) setError((reason as Error).message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [applied]);
+
+  function applyRange(e: FormEvent) {
+    e.preventDefault();
+    if (!filters.desde || !filters.hasta) return setError("Seleccione la fecha de inicio y fin");
+    if (filters.desde > filters.hasta) return setError("La fecha de inicio no puede ser posterior a la fecha final");
+    setApplied({ ...filters });
+  }
+
+  const hasCash = data?.flujo_diario?.some((row: any) => Number(row.ingresos) || Number(row.egresos));
+  const hasActivity = data?.actividad_diaria?.some((row: any) => Number(row.capital_prestamos) || Number(row.capital_ventas) || row.operaciones || row.clientes_nuevos);
+  const paymentData = (data?.formas_pago ?? []).map((row: any) => ({ ...row, valor: Number(row.monto) }));
+  const delinquencyData = data ? [
+    { nombre: "Cartera al día", valor: Number(data.morosidad.cartera_al_dia), color: "#24c784" },
+    { nombre: "Cartera vencida", valor: Number(data.morosidad.cartera_vencida), color: "#ef5966" },
+  ].filter((row) => row.valor > 0) : [];
+
   return (
-    <Page title="Dashboard" subtitle="Resumen general de tu cartera">
-      <section className="metrics-grid">
-        <Metric label="Capital prestado" value={money(data.prestado)} />
-        <Metric label="Total a cobrar" value={money(data.total_cobrar)} />
-        <Metric
-          label="Total cobrado"
-          value={money(data.cobrado)}
-          tone="green"
-        />
-        <Metric
-          label="Saldo pendiente"
-          value={money(data.saldo)}
-          tone="amber"
-        />
-        <Metric
-          label="Vence hoy"
-          value={String(data.vence_hoy)}
-          hint={money(data.monto_vencido)}
-          tone="amber"
-        />
-        <Metric
-          label="Cuotas atrasadas"
-          value={String(data.atrasadas)}
-          tone="red"
-        />
-        <Metric
-          label="Ingresos de hoy"
-          value={money(data.ingresos)}
-          tone="green"
-        />
-        <Metric label="Egresos de hoy" value={money(data.egresos)} tone="red" />
-      </section>
-      <section className="panel intro-panel">
-        <div>
-          <h2>Todo bajo control</h2>
-          <p>
-            Revisá los vencimientos, registrá cobros y seguí el movimiento
-            diario desde un solo lugar.
-          </p>
-        </div>
-        <div className="quick-links">
-          <NavLink className="button primary" to="/nueva-operacion">
-            Nuevo préstamo
-          </NavLink>
-          <NavLink className="button secondary" to="/prestamos">
-            Ver cartera
-          </NavLink>
-        </div>
-      </section>
+    <Page title="Dashboard" subtitle="Análisis financiero de préstamos y ventas financiadas">
+      <form className="panel analytics-filter" onSubmit={applyRange} noValidate>
+        <label>Desde<input type="date" value={filters.desde} max={filters.hasta} onChange={(e) => setFilters({ ...filters, desde: e.target.value })} /></label>
+        <label>Hasta<input type="date" value={filters.hasta} min={filters.desde} onChange={(e) => setFilters({ ...filters, hasta: e.target.value })} /></label>
+        <button className="button primary" disabled={loading}>{loading ? "Actualizando…" : "Actualizar análisis"}</button>
+        <span>Período inclusivo · Caja completa</span>
+      </form>
+      {error && <div className="alert error">{error}</div>}
+      {!data && loading ? <Loading /> : data && <>
+        <section className="metrics-grid five analytics-metrics">
+          <Metric label="Ingresos" value={money(data.kpis.ingresos)} tone="green" />
+          <Metric label="Egresos" value={money(data.kpis.egresos)} tone="red" />
+          <Metric label="Flujo neto" value={money(data.kpis.flujo_neto)} tone={Number(data.kpis.flujo_neto) >= 0 ? "green" : "red"} />
+          <Metric label="Capital colocado" value={money(data.kpis.capital_colocado)} hint={`Préstamos ${money(data.kpis.capital_prestamos)} · Ventas ${money(data.kpis.capital_ventas)}`} />
+          <Metric label="Interés cobrado" value={money(data.kpis.interes_cobrado)} tone="green" />
+          <Metric label="Cartera pendiente" value={money(data.kpis.cartera_pendiente)} tone="amber" />
+          <Metric label="Cartera vencida" value={money(data.kpis.cartera_vencida)} hint={`${data.kpis.cuotas_vencidas} cuotas`} tone="red" />
+          <Metric label="Morosidad monetaria" value={percent(data.kpis.morosidad_porcentaje)} hint="Saldo vencido / saldo pendiente" tone="red" />
+          <Metric label="Clientes morosos" value={String(data.kpis.clientes_morosos)} hint={`${percent(data.kpis.clientes_morosos_porcentaje)} de ${data.kpis.clientes_con_saldo} con saldo`} tone="red" />
+          <Metric label="Cumplimiento" value={percent(data.kpis.cumplimiento_porcentaje)} hint="Cuotas vencidas en el período" tone="green" />
+          <Metric label="Clientes nuevos" value={String(data.kpis.clientes_nuevos)} />
+          <Metric label="Operaciones nuevas" value={String(data.kpis.operaciones_nuevas)} />
+          <Metric label="Ticket promedio" value={money(data.kpis.ticket_promedio)} />
+        </section>
+
+        <section className="analytics-grid">
+          <article className="panel chart-panel chart-wide">
+            <div className="chart-heading"><div><h2>Ingresos y egresos por día</h2><p>Barras de movimiento y línea de flujo neto.</p></div></div>
+            {hasCash ? <div className="chart-body" role="img" aria-label="Gráfico diario de ingresos, egresos y flujo neto">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data.flujo_diario} margin={{ top: 10, right: 18, left: 5, bottom: 0 }}>
+                  <CartesianGrid stroke="#29445a" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="fecha" tickFormatter={chartDate} stroke="#8fa8bc" minTickGap={22} fontSize={10} />
+                  <YAxis tickFormatter={compactNumber} stroke="#8fa8bc" width={58} fontSize={10} />
+                  <Tooltip labelFormatter={(label: any) => chartDate(String(label))} formatter={(value: any, name: any) => [money(value), name === "ingresos" ? "Ingresos" : name === "egresos" ? "Egresos" : "Flujo neto"]} contentStyle={{ background: "#102536", border: "1px solid #34536a", borderRadius: 8 }} />
+                  <Legend formatter={(value) => value === "ingresos" ? "Ingresos" : value === "egresos" ? "Egresos" : "Flujo neto"} />
+                  <Bar dataKey="ingresos" fill="#24c784" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="egresos" fill="#ef5966" radius={[3, 3, 0, 0]} />
+                  <Line type="monotone" dataKey="neto" stroke="#57c7d4" strokeWidth={3} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div> : <div className="chart-empty">No hay movimientos de caja en este período.</div>}
+          </article>
+
+          <article className="panel chart-panel">
+            <div className="chart-heading"><div><h2>Formas de pago</h2><p>Distribución de cobros confirmados.</p></div></div>
+            {paymentData.length ? <div className="chart-body pie-body" role="img" aria-label="Gráfico de formas de pago">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart><Pie data={paymentData} dataKey="valor" nameKey="nombre" innerRadius="48%" outerRadius="76%" paddingAngle={2}>
+                  {paymentData.map((_: any, index: number) => <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}
+                </Pie><Tooltip formatter={(value: any, _name: any, item: any) => [`${money(value)} · ${item.payload.porcentaje}% · ${item.payload.cantidad} pagos`, item.payload.nombre]} contentStyle={{ background: "#102536", border: "1px solid #34536a", borderRadius: 8 }} /><Legend /></PieChart>
+              </ResponsiveContainer>
+            </div> : <div className="chart-empty">No hay pagos confirmados en este período.</div>}
+            {!!paymentData.length && <div className="chart-legend-list">{paymentData.map((row: any, index: number) => <div key={row.nombre}><i style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} /><span>{row.nombre}</span><strong>{money(row.monto)} · {row.porcentaje}%</strong></div>)}</div>}
+          </article>
+
+          <article className="panel chart-panel">
+            <div className="chart-heading"><div><h2>Estado de la cartera</h2><p>Saldo al día frente a saldo vencido.</p></div></div>
+            {delinquencyData.length ? <div className="chart-body pie-body" role="img" aria-label="Gráfico de cartera al día y vencida">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart><Pie data={delinquencyData} dataKey="valor" nameKey="nombre" innerRadius="48%" outerRadius="76%" paddingAngle={2}>
+                  {delinquencyData.map((row) => <Cell key={row.nombre} fill={row.color} />)}
+                </Pie><Tooltip formatter={(value: any, name: any) => [money(value), name]} contentStyle={{ background: "#102536", border: "1px solid #34536a", borderRadius: 8 }} /><Legend /></PieChart>
+              </ResponsiveContainer>
+            </div> : <div className="chart-empty">No existe cartera pendiente a la fecha seleccionada.</div>}
+            <div className="delinquency-summary"><div><span>Morosidad por monto</span><strong>{percent(data.kpis.morosidad_porcentaje)}</strong></div><div><span>Morosidad por clientes</span><strong>{percent(data.kpis.clientes_morosos_porcentaje)}</strong></div></div>
+          </article>
+
+          <article className="panel chart-panel chart-wide">
+            <div className="chart-heading"><div><h2>Colocaciones y altas</h2><p>Capital por tipo de operación, operaciones creadas y clientes nuevos.</p></div></div>
+            {hasActivity ? <div className="chart-body" role="img" aria-label="Gráfico de capital colocado, operaciones y clientes nuevos">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data.actividad_diaria} margin={{ top: 10, right: 15, left: 5, bottom: 0 }}>
+                  <CartesianGrid stroke="#29445a" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="fecha" tickFormatter={chartDate} stroke="#8fa8bc" minTickGap={22} fontSize={10} />
+                  <YAxis yAxisId="money" tickFormatter={compactNumber} stroke="#8fa8bc" width={58} fontSize={10} />
+                  <YAxis yAxisId="count" orientation="right" allowDecimals={false} stroke="#8fa8bc" width={32} fontSize={10} />
+                  <Tooltip labelFormatter={(label: any) => chartDate(String(label))} formatter={(value: any, name: any) => [String(name).startsWith("capital") ? money(value) : String(value), name === "capital_prestamos" ? "Capital préstamos" : name === "capital_ventas" ? "Capital ventas" : name === "operaciones" ? "Operaciones" : "Clientes nuevos"]} contentStyle={{ background: "#102536", border: "1px solid #34536a", borderRadius: 8 }} />
+                  <Legend formatter={(value) => value === "capital_prestamos" ? "Capital préstamos" : value === "capital_ventas" ? "Capital ventas" : value === "operaciones" ? "Operaciones" : "Clientes nuevos"} />
+                  <Bar yAxisId="money" dataKey="capital_prestamos" stackId="capital" fill="#4f91c7" />
+                  <Bar yAxisId="money" dataKey="capital_ventas" stackId="capital" fill="#a979e8" />
+                  <Line yAxisId="count" type="monotone" dataKey="operaciones" stroke="#f4c542" strokeWidth={3} dot={false} />
+                  <Line yAxisId="count" type="monotone" dataKey="clientes_nuevos" stroke="#24c784" strokeWidth={3} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div> : <div className="chart-empty">No hay operaciones ni clientes nuevos en este período.</div>}
+          </article>
+        </section>
+      </>}
     </Page>
   );
 }
@@ -314,9 +469,10 @@ function Operations({
 }) {
   const [rows, setRows] = useState<any[]>([]);
   const [filter, setFilter] = useState("ACTIVA");
+  const [clientSearch, setClientSearch] = useState("");
   useEffect(() => {
-    api<any[]>(`/api/operaciones?tipo=${type}&estado=${filter}`).then(setRows);
-  }, [type, filter]);
+    api<any[]>(`/api/operaciones?tipo=${type}&estado=${filter}&cliente=${encodeURIComponent(clientSearch.trim())}`).then(setRows);
+  }, [type, filter, clientSearch]);
   return (
     <Page
       title={type === "PRESTAMO" ? "Préstamos" : "Ventas financiadas"}
@@ -324,6 +480,14 @@ function Operations({
       action={
         <div className="page-actions">
           {action}
+          <input
+            type="search"
+            className="client-search"
+            placeholder="Buscar cliente..."
+            aria-label="Buscar cliente por nombre o cédula"
+            value={clientSearch}
+            onChange={(e) => setClientSearch(e.target.value)}
+          />
           <select value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option value="">Todos los estados</option>
             <option>ACTIVA</option>
@@ -392,7 +556,7 @@ function LoanCard({ row }: { row: any }) {
         </div>
         <div>
           <small>INTERÉS</small>
-          <strong>{row.porcentaje_interes}%</strong>
+          <strong>{money(row.monto_interes)} / {row.porcentaje_interes}%</strong>
         </div>
       </div>
       <NavLink
@@ -831,22 +995,28 @@ function Clients() {
   const [q, setQ] = useState("");
   const [show, setShow] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const [publicLink, setPublicLink] = useState<{ url: string; fecha_expira: string } | null>(null);
   const load = () =>
     api<any[]>(`/api/clientes?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => {
     load();
   }, [q]);
+  async function generatePublicLink() {
+    try {
+      setPublicLink(await api("/api/clientes/enlaces", { method: "POST" }));
+      setNotice({ type: "ok", text: "Link generado por 24 horas." });
+    } catch (e) { setNotice({ type: "error", text: (e as Error).message }); }
+  }
   return (
     <Page
       title="Clientes"
       subtitle="Información personal, laboral y referencias"
       action={
-        <button className="button primary" onClick={() => setShow(!show)}>
-          {show ? "Cerrar" : "Nuevo cliente"}
-        </button>
+        <div className="page-actions"><button className="button secondary" onClick={generatePublicLink}>Generar link</button><button className="button primary" onClick={() => setShow(!show)}>{show ? "Cerrar" : "Nuevo cliente"}</button></div>
       }
     >
       <NoticeBar notice={notice} />
+      {publicLink && <section className="panel public-link-box"><h2>Link para cargar datos</h2><p className="muted">Vence el {shortDate(publicLink.fecha_expira)} y se invalida después de guardar correctamente.</p><input readOnly value={publicLink.url} /><div className="public-link-actions"><button className="button secondary" onClick={() => navigator.clipboard?.writeText(publicLink.url)}>Copiar link</button><a className="button secondary" href={publicLink.url} target="_blank" rel="noreferrer">Abrir link</a><a className="button whatsapp" href={`https://wa.me/?text=${encodeURIComponent(publicLink.url)}`} target="_blank" rel="noreferrer">Compartir por WhatsApp</a></div></section>}
       {show && (
         <ClientFormComplete
           onDone={() => {
@@ -870,8 +1040,8 @@ function Clients() {
               <th>Cliente</th>
               <th>Cédula</th>
               <th>Teléfono</th>
-              <th>Profesión</th>
-              <th>Ingreso</th>
+              <th>Dirección</th>
+              <th>Edad</th>
               <th>Operaciones</th>
               <th>Acciones</th>
             </tr>
@@ -885,8 +1055,8 @@ function Clients() {
                 </td>
                 <td>{r.cedula}</td>
                 <td>{r.telefono1}</td>
-                <td>{r.profesion || "—"}</td>
-                <td>{money(r.ingreso_promedio)}</td>
+                <td>{r.direccion || "—"}</td>
+                <td>{ageFromBirth(r.fecha_nacimiento)}</td>
                 <td>{r.operaciones}</td>
                 <td>
                   <NavLink
@@ -904,6 +1074,69 @@ function Clients() {
     </Page>
   );
 }
+
+function PublicClientForm({ token }: { token: string }) {
+  const [meta, setMeta] = useState<any>();
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [additionalOpen, setAdditionalOpen] = useState(false);
+  const [front, setFront] = useState<File | null>(null);
+  const [back, setBack] = useState<File | null>(null);
+  const [preparingImages, setPreparingImages] = useState(false);
+  const [data, setData] = useState<any>({
+    nombre_completo: "", cedula: "", fecha_nacimiento: "", direccion: "", telefono1: "",
+    ruc: "", telefono2: "", email: "", dedicacion: "", ingreso_promedio: "0",
+    direccion_trabajo: "", nombre_empresa: "", telefono_empresa: "", ruc_empresa: "", observacion: "",
+    latitud: null, longitud: null, fecha_ubicacion: null,
+    referencias: [{ nombre_completo: "", telefono: "", direccion: "", fk_idtipo_referencia: "" }],
+  });
+  useEffect(() => {
+    api<any>(`/api/public/clientes/${encodeURIComponent(token)}`).then(setMeta).catch((e) => setError(e.message));
+  }, [token]);
+  const set = (key: string, value: any) => setData((current: any) => ({ ...current, [key]: value }));
+  const setRef = (key: string, value: any) => setData((current: any) => ({ ...current, referencias: [{ ...current.referencias[0], [key]: value }] }));
+  function gps() {
+    if (!navigator.geolocation) return setError("Este dispositivo no permite obtener ubicación GPS");
+    navigator.geolocation.getCurrentPosition(
+      (position) => setData((current: any) => ({ ...current, latitud: position.coords.latitude, longitud: position.coords.longitude, fecha_ubicacion: new Date().toISOString() })),
+      (e) => setError(e.message || "No se pudo obtener la ubicación GPS"),
+      { enableHighAccuracy: true },
+    );
+  }
+  async function submit(e: FormEvent) {
+    e.preventDefault(); setError("");
+    if (data.latitud == null || data.longitud == null) return setError("Debe capturar la ubicación GPS");
+    setBusy(true);
+    setPreparingImages(true);
+    try {
+      const [optimizedFront, optimizedBack] = await Promise.all([front ? optimizeCedulaImage(front) : null, back ? optimizeCedulaImage(back) : null]);
+      const form = new FormData(); form.append("datos", JSON.stringify(data));
+      if (optimizedFront) form.append("cedula_frente", optimizedFront);
+      if (optimizedBack) form.append("cedula_atras", optimizedBack);
+      await api(`/api/public/clientes/${encodeURIComponent(token)}`, { method: "POST", body: form });
+      setSuccess(true);
+    } catch (e) { setError((e as Error).message); } finally { setPreparingImages(false); setBusy(false); }
+  }
+  if (success) return <main className="public-page"><section className="public-card panel"><p className="eyebrow">PRÉSTAMOS CDE</p><h1>Datos recibidos</h1><p className="muted">Tus datos y documentos fueron enviados correctamente. Este enlace ya no puede volver a utilizarse.</p></section></main>;
+  if (error && !meta) return <main className="public-page"><section className="public-card panel"><h1>Enlace no disponible</h1><p className="alert error">{error}</p></section></main>;
+  if (!meta) return <main className="public-page"><section className="public-card panel empty">Cargando formulario…</section></main>;
+  return <main className="public-page"><section className="public-card panel"><p className="eyebrow">PRÉSTAMOS CDE</p><h1>Cargar datos del cliente</h1><p className="muted">Completá el formulario y elegí fotos claras de ambos lados de tu cédula desde la galería o la cámara.</p><form className="form-grid public-form" onSubmit={submit}>
+    <label>Nombre completo<input required value={data.nombre_completo} onChange={(e) => set("nombre_completo", e.target.value)} /></label>
+    <label>Cédula<input required value={data.cedula} onChange={(e) => set("cedula", e.target.value)} /></label>
+    <label>Fecha de nacimiento<input required type="date" value={data.fecha_nacimiento} onChange={(e) => set("fecha_nacimiento", e.target.value)} /></label>
+    <label>Dirección<input required value={data.direccion} onChange={(e) => set("direccion", e.target.value)} /></label>
+    <label>Teléfono 1 / WhatsApp<input required value={data.telefono1} onChange={(e) => set("telefono1", e.target.value)} /></label>
+    <button type="button" className="button secondary full" onClick={gps}>{data.latitud != null ? "Ubicación capturada · Actualizar GPS" : "Capturar ubicación GPS"}</button>
+    {data.latitud != null && <p className="gps-ok full">Ubicación capturada: {Number(data.latitud).toFixed(6)}, {Number(data.longitud).toFixed(6)}</p>}
+    <button type="button" className="button secondary full additional-toggle" onClick={() => setAdditionalOpen((open) => !open)}>{additionalOpen ? "Ocultar datos adicional" : "Datos adicional"}</button>
+    {additionalOpen && <div className="full additional-fields"><label>RUC<input value={data.ruc} onChange={(e) => set("ruc", e.target.value)} /></label><label>Teléfono 2<input value={data.telefono2} onChange={(e) => set("telefono2", e.target.value)} /></label><label>Email<input type="email" value={data.email} onChange={(e) => set("email", e.target.value)} /></label><label>Dedicación<input value={data.dedicacion} onChange={(e) => set("dedicacion", e.target.value)} /></label><label>Ingreso promedio<input inputMode="decimal" value={data.ingreso_promedio} onChange={(e) => set("ingreso_promedio", e.target.value.replace(/[^0-9.]/g, ""))} /></label><fieldset className="full employer-box"><legend>Datos de la empresa</legend><div className="form-grid nested-grid"><label>Dirección de trabajo<input value={data.direccion_trabajo} onChange={(e) => set("direccion_trabajo", e.target.value)} /></label><label>Nombre de empresa<input value={data.nombre_empresa} onChange={(e) => set("nombre_empresa", e.target.value)} /></label><label>Teléfono laboral<input value={data.telefono_empresa} onChange={(e) => set("telefono_empresa", e.target.value)} /></label><label>RUC laboral<input value={data.ruc_empresa} onChange={(e) => set("ruc_empresa", e.target.value)} /></label></div></fieldset><label className="full">Observación<textarea value={data.observacion} onChange={(e) => set("observacion", e.target.value)} /></label></div>}
+    <section className="full panel reference"><strong>Referencia 1</strong><input required placeholder="Nombre completo" value={data.referencias[0].nombre_completo} onChange={(e) => setRef("nombre_completo", e.target.value)} /><input required placeholder="Teléfono" value={data.referencias[0].telefono} onChange={(e) => setRef("telefono", e.target.value)} /><input placeholder="Dirección" value={data.referencias[0].direccion} onChange={(e) => setRef("direccion", e.target.value)} /><select required value={data.referencias[0].fk_idtipo_referencia} onChange={(e) => setRef("fk_idtipo_referencia", Number(e.target.value))}><option value="">Tipo de referencia</option>{meta.tipos_referencia?.map((type: any) => <option key={type.idtipo_referencia} value={type.idtipo_referencia}>{type.nombre}</option>)}</select></section>
+    <section className="full panel cedula-panel"><h2>Fotos de cédula <span className="muted">(opcional)</span></h2><p className="muted">Podés elegir fotos desde la galería o la cámara. Las imágenes se reducen automáticamente para evitar problemas de memoria y conexión.</p><div className="cedula-sides"><label className="cedula-side">Frente de cédula<input type="file" accept="image/jpeg,image/png" onChange={(e) => setFront(e.target.files?.[0] || null)} />{front && <small className="file-name">{front.name}</small>}</label><label className="cedula-side">Reverso de cédula<input type="file" accept="image/jpeg,image/png" onChange={(e) => setBack(e.target.files?.[0] || null)} />{back && <small className="file-name">{back.name}</small>}</label></div></section>
+    {error && <div className="alert error full">{error}</div>}<button className="button primary full" disabled={busy}>{busy ? (preparingImages ? "Preparando fotos…" : "Enviando…") : "Enviar datos"}</button>
+  </form></section></main>;
+}
+
 function MapPreview({
   latitud,
   longitud,
@@ -946,7 +1179,7 @@ function ClientForm({ onDone }: { onDone: () => void }) {
     telefono1: "",
     email: "",
     profesion: "",
-    ingreso_promedio: "",
+    ingreso_promedio: "0",
     tasa_interes_sugerida: "",
     referencias: [
       { nombre_completo: "", telefono: "", fk_idtipo_referencia: "" },
@@ -1088,7 +1321,6 @@ function ClientForm({ onDone }: { onDone: () => void }) {
       <label>
         Ingreso promedio
         <input
-          required
           type="text"
           inputMode="decimal"
           pattern="[0-9]+(\.[0-9]{1,4})?"
@@ -1176,11 +1408,13 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   const [clients, setClients] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [error, setError] = useState("");
+  const [interestMode, setInterestMode] = useState<"PORCENTAJE" | "MONTO">("PORCENTAJE");
   const [data, setData] = useState<any>({
     fk_idcliente: "",
     fecha_inicio: new Date().toISOString().slice(0, 10),
     monto_capital: "",
     porcentaje_interes: "10",
+    monto_interes: "",
     cantidad_cuotas: 12,
     frecuencia: "MENSUAL",
     dias_semana: [1],
@@ -1198,6 +1432,10 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             r[0].tasa_interes_sugerida != null
               ? String(r[0].tasa_interes_sugerida)
               : d.porcentaje_interes,
+          monto_interes:
+            d.monto_capital && r[0].tasa_interes_sugerida != null
+              ? roundedAmount(Number(d.monto_capital) * Number(r[0].tasa_interes_sugerida) / 100)
+              : d.monto_interes,
         }));
     });
     api<any[]>("/api/productos").then((r) => {
@@ -1206,12 +1444,54 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         setData((d: any) => ({ ...d, fk_idproducto: String(r[0].idproducto) }));
     });
   }, []);
-  const total = useMemo(
-    () =>
-      Number(data.monto_capital || 0) *
-      (1 + Number(data.porcentaje_interes || 0) / 100),
-    [data],
+  const total = useMemo(() => Number(data.monto_capital || 0) + Number(data.monto_interes || 0), [data]);
+  const installmentsPreview = useMemo(
+    () => calculatePreviewInstallments(data.monto_capital, data.monto_interes, data.cantidad_cuotas),
+    [data.monto_capital, data.monto_interes, data.cantidad_cuotas],
   );
+  function updateCapital(value: string) {
+    setData((d: any) => {
+      const capital = Number(value || 0);
+      if (interestMode === "MONTO") {
+        return {
+          ...d,
+          monto_capital: value,
+          porcentaje_interes: capital > 0
+            ? roundedPercentage(Number(d.monto_interes || 0) / capital * 100)
+            : "",
+        };
+      }
+      return {
+        ...d,
+        monto_capital: value,
+        monto_interes: value && d.porcentaje_interes !== ""
+          ? roundedAmount(capital * Number(d.porcentaje_interes || 0) / 100)
+          : "",
+      };
+    });
+  }
+  function updatePercentage(value: string) {
+    const normalized = normalizeDecimalInput(value);
+    setInterestMode("PORCENTAJE");
+    setData((d: any) => ({
+      ...d,
+      porcentaje_interes: normalized,
+      monto_interes: d.monto_capital && normalized !== ""
+        ? roundedAmount(Number(d.monto_capital) * Number(normalized) / 100)
+        : "",
+    }));
+  }
+  function updateInterestAmount(value: string) {
+    const normalized = normalizeDecimalInput(value, 2);
+    setInterestMode("MONTO");
+    setData((d: any) => ({
+      ...d,
+      monto_interes: normalized,
+      porcentaje_interes: d.monto_capital && normalized !== ""
+        ? roundedPercentage(Number(normalized) / Number(d.monto_capital) * 100)
+        : "",
+    }));
+  }
   function toggleWeekday(day: number) {
     setData((d: any) => {
       const current = d.dias_semana || [];
@@ -1267,6 +1547,8 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     try {
       const body = {
         ...data,
+        modo_interes: interestMode,
+        monto_interes_objetivo: interestMode === "MONTO" ? data.monto_interes : undefined,
         fk_idcliente: Number(data.fk_idcliente),
         fk_idproducto: sale ? Number(data.fk_idproducto) : undefined,
         cantidad_cuotas: Number(data.cantidad_cuotas),
@@ -1311,7 +1593,12 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
                     client?.tasa_interes_sugerida != null
                       ? String(client.tasa_interes_sugerida)
                       : data.porcentaje_interes,
+                  monto_interes:
+                    client?.tasa_interes_sugerida != null && data.monto_capital
+                      ? roundedAmount(Number(data.monto_capital) * Number(client.tasa_interes_sugerida) / 100)
+                      : data.monto_interes,
                 });
+                setInterestMode("PORCENTAJE");
               }}
             >
               {clients.map((c) => (
@@ -1352,28 +1639,32 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             Monto
             <input
               required
-              inputMode="numeric"
+              inputMode="decimal"
               value={data.monto_capital}
-              onChange={(e) =>
-                setData({
-                  ...data,
-                  monto_capital: e.target.value.replace(/\D/g, ""),
-                })
-              }
+              onChange={(e) => updateCapital(e.target.value.replace(/\D/g, ""))}
             />
           </label>
           <label>
             Interés (%)
             <input
               required
-              type="number"
+              type="text"
+              inputMode="decimal"
               min="0"
-              step="0.01"
               value={data.porcentaje_interes}
-              onChange={(e) =>
-                setData({ ...data, porcentaje_interes: e.target.value })
-              }
+              onChange={(e) => updatePercentage(e.target.value)}
             />
+          </label>
+          <label>
+            Interés a cobrar
+            <input
+              required
+              type="text"
+              inputMode="decimal"
+              value={data.monto_interes}
+              onChange={(e) => updateInterestAmount(e.target.value)}
+            />
+            <small className="field-help">Podés ingresar el monto o el porcentaje; se calcula el otro valor.</small>
           </label>
           <label>
             Cantidad de cuotas
@@ -1513,6 +1804,31 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             <strong>{money(total)}</strong>
           </div>
         </div>
+        <section className="installments-preview" aria-label="Vista previa de cuotas">
+          <div className="installments-preview-head">
+            <div>
+              <h2>Vista previa de cuotas</h2>
+              <p>Importes calculados en guaraníes. Se ajusta la última cuota por redondeo.</p>
+            </div>
+            <span>{installmentsPreview.length} cuotas</span>
+          </div>
+          <div className="installments-preview-table" role="table" aria-label="Detalle de cuotas">
+            <div className="installments-preview-row installments-preview-header" role="row">
+              <span role="columnheader">Cuota</span>
+              <span role="columnheader">Interés</span>
+              <span role="columnheader">Capital</span>
+              <span role="columnheader">Total</span>
+            </div>
+            {installmentsPreview.map((cuota) => (
+              <div className="installments-preview-row" role="row" key={cuota.numero}>
+                <span role="cell">{cuota.numero}/{installmentsPreview.length}</span>
+                <strong role="cell">{money(cuota.montoInteres)}</strong>
+                <strong role="cell">{money(cuota.montoCapital)}</strong>
+                <strong role="cell">{money(cuota.montoTotal)}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
         {error && <div className="alert error">{error}</div>}
         <button className="button primary">
           Crear {sale ? "venta" : "préstamo"} y generar cuotas
@@ -1863,21 +2179,57 @@ function Expenses() {
   );
 }
 
-function Admin() {
+function SecurityTabs() {
+  return <nav className="security-tabs" aria-label="Administración de seguridad">
+    <NavLink to="/administracion/usuarios">Usuarios</NavLink>
+    <NavLink to="/administracion/roles">Roles</NavLink>
+    <NavLink to="/administracion/eventos">Eventos</NavLink>
+  </nav>;
+}
+
+function AdminUsers() {
   const [users, setUsers] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [form, setForm] = useState<any>({ fk_idrol: "", login: "", password: "", nombres: "", apellidos: "", cedula: "", email: "" });
+  const [notice, setNotice] = useState<Notice>(null);
+  const load = () => Promise.all([api<any[]>("/api/usuarios"), api<any[]>("/api/roles")]).then(([u, r]) => { setUsers(u); setRoles(r); if (!form.fk_idrol && r[0]) setForm((value: any) => ({ ...value, fk_idrol: String(r[0].idrol) })); });
+  useEffect(() => { load().catch((e) => setNotice({ type: "error", text: e.message })); }, []);
+  function editUser(user: any) { setEditingId(user.idusuario); setForm({ fk_idrol: String(user.fk_idrol), login: user.login, password: "", nombres: user.nombres, apellidos: user.apellidos, cedula: user.cedula, email: user.email || "" }); }
+  function reset() { setEditingId(null); setForm({ fk_idrol: roles[0] ? String(roles[0].idrol) : "", login: "", password: "", nombres: "", apellidos: "", cedula: "", email: "" }); }
+  async function save(e: FormEvent) { e.preventDefault(); try { const payload = { ...form, fk_idrol: Number(form.fk_idrol) }; if (editingId) { delete payload.password; await api(`/api/usuarios/${editingId}`, { method: "PATCH", body: JSON.stringify(payload) }); } else await api("/api/usuarios", { method: "POST", body: JSON.stringify(payload) }); setNotice({ type: "ok", text: editingId ? "Usuario actualizado." : "Usuario creado correctamente." }); reset(); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  async function toggle(user: any) { try { await api(`/api/usuarios/${user.idusuario}/estado`, { method: "PATCH", body: JSON.stringify({ activo: !user.activo }) }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  return <Page title="Usuarios" subtitle="Cuentas, roles y estado de acceso"><SecurityTabs /><NoticeBar notice={notice} /><div className="security-layout"><section className="panel"><h2>{editingId ? "Editar usuario" : "Crear usuario"}</h2><form className="stack" onSubmit={save}><input required placeholder="Nombres" value={form.nombres} onChange={(e) => setForm({ ...form, nombres: e.target.value })} /><input required placeholder="Apellidos" value={form.apellidos} onChange={(e) => setForm({ ...form, apellidos: e.target.value })} /><input required type="email" placeholder="Login / email" value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} /><input required placeholder="Cédula" value={form.cedula} onChange={(e) => setForm({ ...form, cedula: e.target.value })} /><input type="email" placeholder="Email opcional" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /><input required={!editingId} type="password" minLength={8} placeholder={editingId ? "Contraseña (sin cambios)" : "Contraseña"} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /><select required value={form.fk_idrol} onChange={(e) => setForm({ ...form, fk_idrol: e.target.value })}><option value="">Seleccione un rol</option>{roles.filter((r) => r.activo).map((r) => <option key={r.idrol} value={r.idrol}>{r.nombre}</option>)}</select><div className="security-actions"><button className="button primary">{editingId ? "Guardar cambios" : "Crear usuario"}</button>{editingId && <button type="button" className="button secondary" onClick={reset}>Cancelar</button>}</div></form></section><section className="panel security-table"><h2>Usuarios registrados</h2><table><thead><tr><th>Nombre</th><th>Login</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{users.map((u) => <tr key={u.idusuario}><td>{u.nombres} {u.apellidos}<small>C.I. {u.cedula}</small></td><td>{u.login}</td><td>{u.rol}</td><td className={u.activo ? "status-active" : "status-inactive"}>{u.activo ? "Activo" : "Inactivo"}</td><td><div className="security-actions"><button className="button tiny secondary" onClick={() => editUser(u)}>Editar</button><button className="button tiny" onClick={() => toggle(u)}>{u.activo ? "Desactivar" : "Activar"}</button></div></td></tr>)}</tbody></table></section></div></Page>;
+}
+
+function AdminRoles() {
+  const [roles, setRoles] = useState<any[]>([]); const [permissions, setPermissions] = useState<any[]>([]); const [selectedId, setSelectedId] = useState<number | null>(null); const [editingId, setEditingId] = useState<number | null>(null); const [form, setForm] = useState({ nombre: "", descripcion: "" }); const [notice, setNotice] = useState<Notice>(null);
+  const load = () => api<any[]>("/api/roles").then((r) => { setRoles(r); if (selectedId && !r.find((role) => role.idrol === selectedId)) setSelectedId(null); });
+  useEffect(() => { load().catch((e) => setNotice({ type: "error", text: e.message })); }, []);
+  async function selectRole(id: number) { setSelectedId(id); try { setPermissions(await api<any[]>(`/api/roles/${id}/permisos`)); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  function editRole(role: any) { setEditingId(role.idrol); setForm({ nombre: role.nombre, descripcion: role.descripcion || "" }); selectRole(role.idrol); }
+  async function saveRole(e: FormEvent) { e.preventDefault(); try { if (editingId) await api(`/api/roles/${editingId}`, { method: "PATCH", body: JSON.stringify(form) }); else await api("/api/roles", { method: "POST", body: JSON.stringify(form) }); setNotice({ type: "ok", text: editingId ? "Rol actualizado." : "Rol creado." }); setEditingId(null); setForm({ nombre: "", descripcion: "" }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  async function toggle(role: any) { try { await api(`/api/roles/${role.idrol}/estado`, { method: "PATCH", body: JSON.stringify({ activo: !role.activo }) }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  async function savePermissions() { if (!selectedId) return; try { await api(`/api/roles/${selectedId}/permisos`, { method: "PUT", body: JSON.stringify({ permisos: permissions.map((event) => ({ idevento: event.idevento, permitido: Boolean(event.permitido) })) }) }); setNotice({ type: "ok", text: "Permisos actualizados." }); await selectRole(selectedId); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  const groups = permissions.reduce((result: Record<string, any[]>, event) => { (result[event.modulo] ||= []).push(event); return result; }, {});
+  return <Page title="Roles" subtitle="Perfiles y permisos del sistema"><SecurityTabs /><NoticeBar notice={notice} /><div className="security-layout"><section className="panel"><h2>{editingId ? "Editar rol" : "Crear rol"}</h2><form className="stack" onSubmit={saveRole}><input required placeholder="Nombre del rol" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} /><textarea placeholder="Descripción" value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} /><div className="security-actions"><button className="button primary">{editingId ? "Guardar cambios" : "Crear rol"}</button>{editingId && <button type="button" className="button secondary" onClick={() => { setEditingId(null); setForm({ nombre: "", descripcion: "" }); }}>Cancelar</button>}</div></form><h2>Roles registrados</h2><div className="security-table"><table><thead><tr><th>Rol</th><th>Usuarios</th><th>Permisos</th><th>Estado</th></tr></thead><tbody>{roles.map((role) => <tr key={role.idrol} onClick={() => selectRole(role.idrol)}><td><strong>{role.nombre}</strong><small>{role.descripcion || "Sin descripción"}</small></td><td>{role.usuarios}</td><td>{role.permisos}</td><td><div className="security-actions"><span className={role.activo ? "status-active" : "status-inactive"}>{role.activo ? "Activo" : "Inactivo"}</span><button className="button tiny secondary" onClick={(e) => { e.stopPropagation(); editRole(role); }}>Editar</button><button className="button tiny" onClick={(e) => { e.stopPropagation(); toggle(role); }}>{role.activo ? "Desactivar" : "Activar"}</button></div></td></tr>)}</tbody></table></div></section><section className="panel"><div className="section-head"><div><h2>Permisos del rol</h2><p className="muted">Seleccione un rol para asignar eventos permitidos.</p></div><button className="button primary" disabled={!selectedId} onClick={savePermissions}>Guardar permisos</button></div>{selectedId ? <div className="permission-grid">{Object.entries(groups).map(([module, events]) => <div className="permission-group" key={module}><h3>{module}</h3>{(events as any[]).map((event) => <label className="permission-option" key={event.idevento}><input type="checkbox" checked={Boolean(event.permitido)} onChange={() => setPermissions((items) => items.map((item) => item.idevento === event.idevento ? { ...item, permitido: !item.permitido } : item))} />{event.nombre}<small>{event.codigo}</small></label>)}</div>)}</div> : <div className="empty">Seleccione un rol para ver sus permisos.</div>}</section></div></Page>;
+}
+
+function AdminEvents() {
+  const [events, setEvents] = useState<any[]>([]); const [editingId, setEditingId] = useState<number | null>(null); const [form, setForm] = useState({ codigo: "", modulo: "", nombre: "", descripcion: "" }); const [notice, setNotice] = useState<Notice>(null);
+  const load = () => api<any[]>("/api/eventos").then(setEvents);
+  useEffect(() => { load().catch((e) => setNotice({ type: "error", text: e.message })); }, []);
+  function editEvent(event: any) { setEditingId(event.idevento); setForm({ codigo: event.codigo, modulo: event.modulo, nombre: event.nombre, descripcion: event.descripcion || "" }); }
+  async function save(e: FormEvent) { e.preventDefault(); try { if (editingId) await api(`/api/eventos/${editingId}`, { method: "PATCH", body: JSON.stringify(form) }); else await api("/api/eventos", { method: "POST", body: JSON.stringify(form) }); setNotice({ type: "ok", text: editingId ? "Evento actualizado." : "Evento creado." }); setEditingId(null); setForm({ codigo: "", modulo: "", nombre: "", descripcion: "" }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  async function toggle(event: any) { try { await api(`/api/eventos/${event.idevento}/estado`, { method: "PATCH", body: JSON.stringify({ activo: !event.activo }) }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  return <Page title="Eventos" subtitle="Catálogo de acciones y permisos"><SecurityTabs /><NoticeBar notice={notice} /><div className="security-layout"><section className="panel"><h2>{editingId ? "Editar evento" : "Crear evento"}</h2><form className="stack" onSubmit={save}><input required placeholder="Código único" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} /><input required placeholder="Módulo" value={form.modulo} onChange={(e) => setForm({ ...form, modulo: e.target.value })} /><input required placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} /><textarea placeholder="Descripción" value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} /><div className="security-actions"><button className="button primary">{editingId ? "Guardar cambios" : "Crear evento"}</button>{editingId && <button type="button" className="button secondary" onClick={() => { setEditingId(null); setForm({ codigo: "", modulo: "", nombre: "", descripcion: "" }); }}>Cancelar</button>}</div></form></section><section className="panel security-table"><h2>Eventos registrados</h2><table><thead><tr><th>Código</th><th>Módulo</th><th>Evento</th><th>Roles</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{events.map((event) => <tr key={event.idevento}><td>{event.codigo}</td><td>{event.modulo}</td><td><strong>{event.nombre}</strong><small>{event.descripcion || "Sin descripción"}</small></td><td>{event.roles}</td><td className={event.activo ? "status-active" : "status-inactive"}>{event.activo ? "Activo" : "Inactivo"}</td><td><div className="security-actions"><button className="button tiny secondary" onClick={() => editEvent(event)}>Editar</button><button className="button tiny" onClick={() => toggle(event)}>{event.activo ? "Desactivar" : "Activar"}</button></div></td></tr>)}</tbody></table></section></div></Page>;
+}
+
+function Admin() {
   const [banks, setBanks] = useState<any[]>([]);
   const [settings, setSettings] = useState<any[]>([]);
   const [types, setTypes] = useState<any[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
-  const [userForm, setUserForm] = useState<any>({
-    fk_idrol: "",
-    login: "",
-    password: "",
-    nombres: "",
-    apellidos: "",
-    cedula: "",
-  });
   const [bankForm, setBankForm] = useState({ codigo: "", nombre: "" });
   const [typeForm, setTypeForm] = useState({
     nombre: "",
@@ -1886,50 +2238,17 @@ function Admin() {
   });
   const load = () =>
     Promise.all([
-      api<any[]>("/api/usuarios"),
-      api<any[]>("/api/roles"),
       api<any[]>("/api/bancos"),
       api<any[]>("/api/configuracion"),
       api<any[]>("/api/administracion/tipos-referencia"),
-    ]).then(([u, r, b, c, t]) => {
-      setUsers(u);
-      setRoles(r);
+    ]).then(([b, c, t]) => {
       setBanks(b);
       setSettings(c);
       setTypes(t);
-      if (r[0])
-        setUserForm((f: any) => ({
-          ...f,
-          fk_idrol: f.fk_idrol || String(r[0].idrol),
-        }));
     });
   useEffect(() => {
     load();
   }, []);
-  async function addUser(e: FormEvent) {
-    e.preventDefault();
-    try {
-      await api("/api/usuarios", {
-        method: "POST",
-        body: JSON.stringify({
-          ...userForm,
-          fk_idrol: Number(userForm.fk_idrol),
-        }),
-      });
-      setNotice({ type: "ok", text: "Usuario creado correctamente." });
-      setUserForm({
-        ...userForm,
-        login: "",
-        password: "",
-        nombres: "",
-        apellidos: "",
-        cedula: "",
-      });
-      load();
-    } catch (e) {
-      setNotice({ type: "error", text: (e as Error).message });
-    }
-  }
   async function addBank(e: FormEvent) {
     e.preventDefault();
     try {
@@ -1996,82 +2315,9 @@ function Admin() {
       title="Administración"
       subtitle="Usuarios, roles, bancos y configuración"
     >
+      <SecurityTabs />
       <NoticeBar notice={notice} />
       <section className="admin-grid">
-        <div className="panel">
-          <h2>
-            <ShieldCheck /> Usuarios y roles
-          </h2>
-          <form className="mini-form" onSubmit={addUser}>
-            <input
-              required
-              placeholder="Nombres"
-              value={userForm.nombres}
-              onChange={(e) =>
-                setUserForm({ ...userForm, nombres: e.target.value })
-              }
-            />
-            <input
-              required
-              placeholder="Apellidos"
-              value={userForm.apellidos}
-              onChange={(e) =>
-                setUserForm({ ...userForm, apellidos: e.target.value })
-              }
-            />
-            <input
-              required
-              type="email"
-              placeholder="Usuario / email"
-              value={userForm.login}
-              onChange={(e) =>
-                setUserForm({ ...userForm, login: e.target.value })
-              }
-            />
-            <input
-              required
-              placeholder="Cédula"
-              value={userForm.cedula}
-              onChange={(e) =>
-                setUserForm({ ...userForm, cedula: e.target.value })
-              }
-            />
-            <input
-              required
-              type="password"
-              minLength={8}
-              placeholder="Contraseña"
-              value={userForm.password}
-              onChange={(e) =>
-                setUserForm({ ...userForm, password: e.target.value })
-              }
-            />
-            <select
-              value={userForm.fk_idrol}
-              onChange={(e) =>
-                setUserForm({ ...userForm, fk_idrol: e.target.value })
-              }
-            >
-              {roles.map((r) => (
-                <option key={r.idrol} value={r.idrol}>
-                  {r.nombre}
-                </option>
-              ))}
-            </select>
-            <button className="button primary">Crear usuario</button>
-          </form>
-          {users.map((u) => (
-            <div className="list-row" key={u.idusuario}>
-              <div>
-                <strong>
-                  {u.nombres} {u.apellidos}
-                </strong>
-                <small>{u.login}</small>
-              </div>
-              <span className="badge pendiente">{u.rol}</span>
-            </div>
-          ))}
-        </div>
         <div className="panel">
           <h2>
             <Building2 /> Bancos
@@ -2194,7 +2440,7 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
     email: "",
     profesion: "",
     dedicacion: "",
-    ingreso_promedio: "",
+    ingreso_promedio: "0",
     tasa_interes_sugerida: "",
     direccion_trabajo: "",
     nombre_empresa: "",
@@ -2208,15 +2454,10 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
         direccion: "",
         fk_idtipo_referencia: "",
       },
-      {
-        nombre_completo: "",
-        telefono: "",
-        direccion: "",
-        fk_idtipo_referencia: "",
-      },
     ],
   });
   const [error, setError] = useState("");
+  const [additionalOpen, setAdditionalOpen] = useState(false);
   useEffect(() => {
     api<any[]>("/api/tipos-referencia").then((r) => {
       setTypes(r);
@@ -2319,10 +2560,6 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
         />
       </label>
       <label>
-        RUC
-        <input value={data.ruc} onChange={(e) => set("ruc", e.target.value)} />
-      </label>
-      <label>
         Dirección
         <input
           required
@@ -2339,54 +2576,43 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
         />
       </label>
       <label>
-        Teléfono 2
-        <input
-          value={data.telefono2}
-          onChange={(e) => set("telefono2", e.target.value)}
-        />
-      </label>
-      <label>
-        Email
-        <input
-          type="email"
-          value={data.email}
-          onChange={(e) => set("email", e.target.value)}
-        />
-      </label>
-      <label>
-        Profesión
-        <input
-          value={data.profesion}
-          onChange={(e) => set("profesion", e.target.value)}
-        />
-      </label>
-      <label>
-        Dedicación
-        <input
-          value={data.dedicacion}
-          onChange={(e) => set("dedicacion", e.target.value)}
-        />
-      </label>
-      <label>
-        Ingreso promedio
-        <input
-          required
-          inputMode="decimal"
-          value={data.ingreso_promedio}
-          onChange={(e) => set("ingreso_promedio", numeric(e.target.value))}
-        />
-      </label>
-      <label>
         Interés sugerido (%)
         <input
           required
           inputMode="numeric"
           value={data.tasa_interes_sugerida}
-          onChange={(e) =>
-            set("tasa_interes_sugerida", integer(e.target.value))
-          }
+          onChange={(e) => set("tasa_interes_sugerida", integer(e.target.value))}
         />
       </label>
+      <button type="button" className="button secondary full additional-toggle" onClick={() => setAdditionalOpen((open) => !open)}>
+        {additionalOpen ? "Ocultar datos adicional" : "Datos adicional"}
+      </button>
+      {additionalOpen && <div className="full additional-fields">
+        <label>
+          RUC
+          <input value={data.ruc} onChange={(e) => set("ruc", e.target.value)} />
+        </label>
+        <label>
+          Teléfono 2
+          <input value={data.telefono2} onChange={(e) => set("telefono2", e.target.value)} />
+        </label>
+        <label>
+          Email
+          <input type="email" value={data.email} onChange={(e) => set("email", e.target.value)} />
+        </label>
+        <label>
+          Profesión
+          <input value={data.profesion} onChange={(e) => set("profesion", e.target.value)} />
+        </label>
+        <label>
+          Dedicación
+          <input value={data.dedicacion} onChange={(e) => set("dedicacion", e.target.value)} />
+        </label>
+        <label>
+          Ingreso promedio
+          <input inputMode="decimal" value={data.ingreso_promedio} onChange={(e) => set("ingreso_promedio", numeric(e.target.value))} />
+        </label>
+
       <fieldset className="full employer-box">
         <legend>Datos de la empresa</legend>
         <div className="form-grid nested-grid">
@@ -2427,6 +2653,7 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
           onChange={(e) => set("observacion", e.target.value)}
         />
       </label>
+      </div>}
       <button type="button" className="button secondary" onClick={gps}>
         Capturar ubicación GPS
       </button>
@@ -2439,7 +2666,7 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
           />
         </div>
       )}
-      {data.referencias.map((r: any, i: number) => (
+      {data.referencias.slice(0, 1).map((r: any, i: number) => (
         <div className="reference full" key={i}>
           <strong>Referencia {i + 1}</strong>
           <input
@@ -2488,12 +2715,17 @@ function ClientFormComplete({ onDone }: { onDone: () => void }) {
   );
 }
 export default function App() {
+  const location = useLocation();
+  const publicMatch = location.pathname.match(/^\/carga-cliente\/([^/]+)$/);
+  const isPublic = Boolean(publicMatch);
   const [user, setUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
+    if (isPublic) return;
     api<{ user: User }>("/api/auth/me")
       .then((r) => setUser(r.user))
       .catch(() => setUser(null));
-  }, []);
+  }, [isPublic]);
+  if (publicMatch) return <PublicClientForm token={decodeURIComponent(publicMatch[1])} />;
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
     setUser(null);
@@ -2525,6 +2757,9 @@ export default function App() {
         <Route path="/caja" element={<Cash />} />
         <Route path="/gastos" element={<Expenses />} />
         <Route path="/administracion" element={<Admin />} />
+        <Route path="/administracion/usuarios" element={<AdminUsers />} />
+        <Route path="/administracion/roles" element={<AdminRoles />} />
+        <Route path="/administracion/eventos" element={<AdminEvents />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Shell>

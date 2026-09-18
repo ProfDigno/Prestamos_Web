@@ -14,6 +14,8 @@ Para el mapa interactivo configure `GOOGLE_MAPS_API_KEY` en `server/.env`. Sin c
 
 Cambie la contraseña y el secreto de sesión antes de utilizar información real.
 
+Para generar formularios públicos de clientes, configure `APP_ORIGIN` con la URL HTTPS accesible desde los teléfonos (por ejemplo, `https://192.168.0.2:3443`), nunca con `localhost`. El enlace generado vence en 24 horas y se invalida después de guardar correctamente. Aplique también `database/010_enlaces_cliente.sql`.
+
 ## Puesta en marcha
 
 1. Instale Node.js y asegúrese de que PostgreSQL esté iniciado.
