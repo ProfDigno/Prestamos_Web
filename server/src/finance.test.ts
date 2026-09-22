@@ -1,10 +1,11 @@
 import { describe,expect,it } from 'vitest';
-import { allocatePayment,calculateFlatLoan,calculateFlatLoanFromInterestAmount,generateDueDates } from './finance.js';
+import { allocatePayment,calculateBrokerCommission,calculateFlatLoan,calculateFlatLoanFromInterestAmount,generateDueDates } from './finance.js';
 
 describe('finanzas',()=>{
   it('calcula interés plano y ajusta la última cuota',()=>{const r=calculateFlatLoan('1000','10',3);expect(r.interest).toBe('100.00');expect(r.total).toBe('1100.00');expect(r.cuotas.reduce((s,q)=>s+Number(q.montoTotal),0)).toBe(1100);});
   it('acepta porcentajes decimales',()=>{const r=calculateFlatLoan('1000000','12.5',3);expect(r.percentage).toBe('12.50000000');expect(r.interest).toBe('125000.00');expect(r.total).toBe('1125000.00');});
   it('calcula el porcentaje desde un monto de interés',()=>{const r=calculateFlatLoanFromInterestAmount('1000000','125000',3);expect(r.percentage).toBe('12.50000000');expect(r.interest).toBe('125000.00');});
+  it('calcula la comisión del corredor sobre el interés total',()=>{expect(calculateBrokerCommission('125000','7.5')).toBe('9375.00');expect(calculateBrokerCommission('3','33.3333')).toBe('1.00');});
   it('conserva un monto directo aunque el porcentaje no sea periódico',()=>{const r=calculateFlatLoanFromInterestAmount('3','1',2);expect(r.percentage).toBe('33.33333333');expect(r.interest).toBe('1.00');expect(r.cuotas.reduce((s,q)=>s+Number(q.montoInteres),0)).toBe(1);});
   it('genera días diarios seleccionados después del inicio',()=>{expect(generateDueDates({fechaInicio:'2026-09-11',cantidadCuotas:3,frecuencia:'DIARIA',diasSemana:[1,3,5]})).toEqual(['2026-09-14','2026-09-16','2026-09-18']);});
   it('ajusta mensual al fin de febrero bisiesto',()=>{expect(generateDueDates({fechaInicio:'2028-01-31',cantidadCuotas:2,frecuencia:'MENSUAL',diasMes:[31]})).toEqual(['2028-02-29','2028-03-31']);});

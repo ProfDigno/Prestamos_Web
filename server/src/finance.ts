@@ -58,6 +58,12 @@ export function calculateFlatLoan(capital: string, rate: string, installments: n
   return calculateFlatLoanFromInterest(principal, interest, installments, percentage);
 }
 
+export function calculateBrokerCommission(interest: string, percentage: string): string {
+  const amount = new Decimal(interest).mul(percentage).div(100);
+  if (amount.lt(0)) throw new Error('Comisión inválida');
+  return amount.toDecimalPlaces(2).toFixed(2);
+}
+
 function calculateFlatLoanFromInterest(principal: Decimal, interest: Decimal, installments: number, percentage: Decimal) {
   if (principal.lte(0) || interest.lt(0) || installments < 1) throw new Error('Datos financieros inválidos');
   const total = principal.plus(interest);

@@ -23,6 +23,7 @@ import {
   ChevronRight,
   ChevronDown,
   CircleDollarSign,
+  Handshake,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -221,6 +222,7 @@ function Shell({
               <NavLink to="/administracion/usuarios" onClick={() => setOpen(false)}><Users /><span>Usuarios</span></NavLink>
               <NavLink to="/administracion/roles" onClick={() => setOpen(false)}><ShieldCheck /><span>Roles</span></NavLink>
               <NavLink to="/administracion/eventos" onClick={() => setOpen(false)}><Settings /><span>Eventos</span></NavLink>
+              <NavLink to="/administracion/corredores" onClick={() => setOpen(false)}><Handshake /><span>Corredores</span></NavLink>
             </div>}
           </div>
         </nav>
@@ -966,6 +968,8 @@ function OperationDetail() {
             <dd>{shortDate(data.fecha_inicio)}</dd>
             <dt>Tasa de interés</dt>
             <dd>{data.porcentaje_interes}%</dd>
+            <dt>Corredor</dt>
+            <dd>{data.corredor_nombre ? `${data.corredor_nombre} · ${data.porcentaje_comision}% · ${money(data.monto_comision)}` : "Sin corredor"}</dd>
             <dt>Estado</dt>
             <dd>{data.estado}</dd>
             <dt>Observación</dt>
@@ -1406,10 +1410,12 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   const nav = useNavigate();
   const [clients, setClients] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [brokers, setBrokers] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [interestMode, setInterestMode] = useState<"PORCENTAJE" | "MONTO">("PORCENTAJE");
   const [data, setData] = useState<any>({
     fk_idcliente: "",
+    fk_idcorredor: "",
     fecha_inicio: new Date().toISOString().slice(0, 10),
     monto_capital: "",
     porcentaje_interes: "10",
@@ -1442,6 +1448,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
       if (r[0])
         setData((d: any) => ({ ...d, fk_idproducto: String(r[0].idproducto) }));
     });
+    api<any[]>("/api/corredores/activos").then(setBrokers).catch(() => setBrokers([]));
   }, []);
   const total = useMemo(() => Number(data.monto_capital || 0) + Number(data.monto_interes || 0), [data]);
   const installmentsPreview = useMemo(
@@ -1549,6 +1556,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         modo_interes: interestMode,
         monto_interes_objetivo: interestMode === "MONTO" ? data.monto_interes : undefined,
         fk_idcliente: Number(data.fk_idcliente),
+        fk_idcorredor: data.fk_idcorredor ? Number(data.fk_idcorredor) : undefined,
         fk_idproducto: sale ? Number(data.fk_idproducto) : undefined,
         cantidad_cuotas: Number(data.cantidad_cuotas),
         dias_semana: ["DIARIA", "SEMANAL"].includes(data.frecuencia)
@@ -1605,6 +1613,13 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
                   {c.nombre_completo}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            Corredor (opcional)
+            <select value={data.fk_idcorredor} onChange={(e) => setData({ ...data, fk_idcorredor: e.target.value })}>
+              <option value="">Sin corredor</option>
+              {brokers.map((broker) => <option key={broker.idcorredor} value={broker.idcorredor}>{broker.nombre_completo} · {broker.porcentaje_comision}%</option>)}
             </select>
           </label>
           {sale && (
@@ -2183,6 +2198,7 @@ function SecurityTabs() {
     <NavLink to="/administracion/usuarios">Usuarios</NavLink>
     <NavLink to="/administracion/roles">Roles</NavLink>
     <NavLink to="/administracion/eventos">Eventos</NavLink>
+    <NavLink to="/administracion/corredores">Corredores</NavLink>
   </nav>;
 }
 
@@ -2222,6 +2238,20 @@ function AdminEvents() {
   async function save(e: FormEvent) { e.preventDefault(); try { if (editingId) await api(`/api/eventos/${editingId}`, { method: "PATCH", body: JSON.stringify(form) }); else await api("/api/eventos", { method: "POST", body: JSON.stringify(form) }); setNotice({ type: "ok", text: editingId ? "Evento actualizado." : "Evento creado." }); setEditingId(null); setForm({ codigo: "", modulo: "", nombre: "", descripcion: "" }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
   async function toggle(event: any) { try { await api(`/api/eventos/${event.idevento}/estado`, { method: "PATCH", body: JSON.stringify({ activo: !event.activo }) }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
   return <Page title="Eventos" subtitle="Catálogo de acciones y permisos"><SecurityTabs /><NoticeBar notice={notice} /><div className="security-layout"><section className="panel"><h2>{editingId ? "Editar evento" : "Crear evento"}</h2><form className="stack" onSubmit={save}><input required placeholder="Código único" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} /><input required placeholder="Módulo" value={form.modulo} onChange={(e) => setForm({ ...form, modulo: e.target.value })} /><input required placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} /><textarea placeholder="Descripción" value={form.descripcion} onChange={(e) => setForm({ ...form, descripcion: e.target.value })} /><div className="security-actions"><button className="button primary">{editingId ? "Guardar cambios" : "Crear evento"}</button>{editingId && <button type="button" className="button secondary" onClick={() => { setEditingId(null); setForm({ codigo: "", modulo: "", nombre: "", descripcion: "" }); }}>Cancelar</button>}</div></form></section><section className="panel security-table"><h2>Eventos registrados</h2><table><thead><tr><th>Código</th><th>Módulo</th><th>Evento</th><th>Roles</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{events.map((event) => <tr key={event.idevento}><td>{event.codigo}</td><td>{event.modulo}</td><td><strong>{event.nombre}</strong><small>{event.descripcion || "Sin descripción"}</small></td><td>{event.roles}</td><td className={event.activo ? "status-active" : "status-inactive"}>{event.activo ? "Activo" : "Inactivo"}</td><td><div className="security-actions"><button className="button tiny secondary" onClick={() => editEvent(event)}>Editar</button><button className="button tiny" onClick={() => toggle(event)}>{event.activo ? "Desactivar" : "Activar"}</button></div></td></tr>)}</tbody></table></section></div></Page>;
+}
+
+function AdminBrokers() {
+  const [brokers, setBrokers] = useState<any[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [form, setForm] = useState({ nombre_completo: "", cedula: "", telefono: "", email: "", porcentaje_comision: "0" });
+  const [notice, setNotice] = useState<Notice>(null);
+  const empty = () => { setEditingId(null); setForm({ nombre_completo: "", cedula: "", telefono: "", email: "", porcentaje_comision: "0" }); };
+  const load = () => api<any[]>("/api/corredores").then(setBrokers);
+  useEffect(() => { load().catch((e) => setNotice({ type: "error", text: e.message })); }, []);
+  function edit(broker: any) { setEditingId(broker.idcorredor); setForm({ nombre_completo: broker.nombre_completo, cedula: broker.cedula, telefono: broker.telefono, email: broker.email || "", porcentaje_comision: String(broker.porcentaje_comision) }); }
+  async function save(e: FormEvent) { e.preventDefault(); try { const payload = { ...form, porcentaje_comision: form.porcentaje_comision.replace(",", ".") }; if (editingId) await api(`/api/corredores/${editingId}`, { method: "PATCH", body: JSON.stringify(payload) }); else await api("/api/corredores", { method: "POST", body: JSON.stringify(payload) }); setNotice({ type: "ok", text: editingId ? "Corredor actualizado." : "Corredor creado." }); empty(); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  async function toggle(broker: any) { try { await api(`/api/corredores/${broker.idcorredor}/estado`, { method: "PATCH", body: JSON.stringify({ activo: !broker.activo }) }); await load(); } catch (e) { setNotice({ type: "error", text: (e as Error).message }); } }
+  return <Page title="Corredores" subtitle="Agentes y comisiones por operación"><SecurityTabs /><NoticeBar notice={notice} /><div className="security-layout"><section className="panel"><h2>{editingId ? "Editar corredor" : "Crear corredor"}</h2><form className="stack" onSubmit={save}><input required placeholder="Nombre completo" value={form.nombre_completo} onChange={(e) => setForm({ ...form, nombre_completo: e.target.value })} /><input required placeholder="Cédula" value={form.cedula} onChange={(e) => setForm({ ...form, cedula: e.target.value })} /><input required placeholder="Teléfono" value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} /><input type="email" placeholder="Email opcional" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /><input required inputMode="decimal" placeholder="Comisión (%)" value={form.porcentaje_comision} onChange={(e) => setForm({ ...form, porcentaje_comision: normalizeDecimalInput(e.target.value) })} /><div className="security-actions"><button className="button primary">{editingId ? "Guardar cambios" : "Crear corredor"}</button>{editingId && <button type="button" className="button secondary" onClick={empty}>Cancelar</button>}</div></form></section><section className="panel security-table"><h2>Corredores registrados</h2><table><thead><tr><th>Nombre</th><th>Contacto</th><th>Comisión</th><th>Operaciones</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{brokers.map((broker) => <tr key={broker.idcorredor}><td><strong>{broker.nombre_completo}</strong><small>C.I. {broker.cedula}</small></td><td>{broker.telefono}<small>{broker.email || "Sin email"}</small></td><td>{broker.porcentaje_comision}%</td><td>{broker.operaciones}</td><td className={broker.activo ? "status-active" : "status-inactive"}>{broker.activo ? "Activo" : "Inactivo"}</td><td><div className="security-actions"><button className="button tiny secondary" onClick={() => edit(broker)}>Editar</button><button className="button tiny" onClick={() => toggle(broker)}>{broker.activo ? "Desactivar" : "Activar"}</button></div></td></tr>)}</tbody></table></section></div></Page>;
 }
 
 function Admin() {
@@ -2759,6 +2789,7 @@ export default function App() {
         <Route path="/administracion/usuarios" element={<AdminUsers />} />
         <Route path="/administracion/roles" element={<AdminRoles />} />
         <Route path="/administracion/eventos" element={<AdminEvents />} />
+        <Route path="/administracion/corredores" element={<AdminBrokers />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Shell>
