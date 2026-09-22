@@ -118,11 +118,10 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
     <main className="login-page">
       <section className="login-card">
         <div className="brand-mark">
-          <Banknote />
-          <span>PC</span>
+          <img src="/nm-creditos-logo.jpeg" alt="NM CREDITOS" />
         </div>
         <p className="eyebrow">GESTIÓN FINANCIERA</p>
-        <h1>Préstamos CDE</h1>
+        <h1>NM CREDITOS</h1>
         <p className="muted">
           Ingresá para administrar clientes, cobros y caja.
         </p>
@@ -186,10 +185,10 @@ function Shell({
       <aside className={open ? "sidebar open" : "sidebar"}>
         <div className="brand">
           <div className="brand-mark small">
-            <Banknote />
+            <img src="/nm-creditos-logo.jpeg" alt="NM CREDITOS" />
           </div>
           <div>
-            <strong>Préstamos CDE</strong>
+            <strong>NM CREDITOS</strong>
             <span>PANEL</span>
           </div>
           <button className="icon mobile-only" onClick={() => setOpen(false)}>
@@ -267,7 +266,7 @@ function Page({
     <main className="page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">PRÉSTAMOS CDE</p>
+          <p className="eyebrow">NM CREDITOS</p>
           <h1>{title}</h1>
           {subtitle && <p className="muted">{subtitle}</p>}
         </div>
@@ -1118,10 +1117,10 @@ function PublicClientForm({ token }: { token: string }) {
       setSuccess(true);
     } catch (e) { setError((e as Error).message); } finally { setPreparingImages(false); setBusy(false); }
   }
-  if (success) return <main className="public-page"><section className="public-card panel"><p className="eyebrow">PRÉSTAMOS CDE</p><h1>Datos recibidos</h1><p className="muted">Tus datos y documentos fueron enviados correctamente. Este enlace ya no puede volver a utilizarse.</p></section></main>;
+  if (success) return <main className="public-page"><section className="public-card panel"><p className="eyebrow">NM CREDITOS</p><h1>Datos recibidos</h1><p className="muted">Tus datos y documentos fueron enviados correctamente. Este enlace ya no puede volver a utilizarse.</p></section></main>;
   if (error && !meta) return <main className="public-page"><section className="public-card panel"><h1>Enlace no disponible</h1><p className="alert error">{error}</p></section></main>;
   if (!meta) return <main className="public-page"><section className="public-card panel empty">Cargando formulario…</section></main>;
-  return <main className="public-page"><section className="public-card panel"><p className="eyebrow">PRÉSTAMOS CDE</p><h1>Cargar datos del cliente</h1><p className="muted">Completá el formulario y elegí fotos claras de ambos lados de tu cédula desde la galería o la cámara.</p><form className="form-grid public-form" onSubmit={submit}>
+  return <main className="public-page"><section className="public-card panel"><p className="eyebrow">NM CREDITOS</p><h1>Cargar datos del cliente</h1><p className="muted">Completá el formulario y elegí fotos claras de ambos lados de tu cédula desde la galería o la cámara.</p><form className="form-grid public-form" onSubmit={submit}>
     <label>Nombre completo<input required value={data.nombre_completo} onChange={(e) => set("nombre_completo", e.target.value)} /></label>
     <label>Cédula<input required value={data.cedula} onChange={(e) => set("cedula", e.target.value)} /></label>
     <label>Fecha de nacimiento<input required type="date" value={data.fecha_nacimiento} onChange={(e) => set("fecha_nacimiento", e.target.value)} /></label>
@@ -2734,7 +2733,7 @@ export default function App() {
     return (
       <div className="splash">
         <Banknote />
-        <span>Préstamos CDE</span>
+        <span>NM CREDITOS</span>
       </div>
     );
   if (!user) return <Login onLogin={setUser} />;

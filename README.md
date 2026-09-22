@@ -9,10 +9,7 @@ Sistema web para administrar clientes, préstamos, ventas financiadas, cuotas, c
 - Aplicación en la red: `https://192.168.0.2:3443`
 
 Para el mapa interactivo configure `GOOGLE_MAPS_API_KEY` en `server/.env`. Sin clave se muestra igualmente el mapa incrustado y el enlace directo a Google Maps.
-- Usuario demo: `admin@prestamos.local`
-- Contraseña temporal: `Prestamo2026!`
-
-Cambie la contraseña y el secreto de sesión antes de utilizar información real.
+Cambie la contraseña del administrador y el secreto de sesión antes de utilizar información real.
 
 Para generar formularios públicos de clientes, configure `APP_ORIGIN` con la URL HTTPS accesible desde los teléfonos (por ejemplo, `https://192.168.0.2:3443`), nunca con `localhost`. El enlace generado vence en 24 horas y se invalida después de guardar correctamente. Aplique también `database/010_enlaces_cliente.sql`.
 
@@ -23,7 +20,7 @@ Para generar formularios públicos de clientes, configure `APP_ORIGIN` con la UR
 3. Ejecute `npm install`.
 4. En una base vacía, aplique `database/001_esquema_inicial.sql`.
 5. Ejecute `npm run cert:generate` para crear el certificado HTTPS local.
-6. Ejecute `npm run db:seed` para cargar la demostración sin duplicar datos.
+6. Ejecute `npm run db:seed` únicamente en una base nueva para crear la configuración inicial.
 7. Ejecute `npm run build` y luego `npm start`.
 
 Para desarrollo use `npm run dev`. El frontend se abre en el puerto 5173 y dirige `/api` al servidor HTTPS.
@@ -42,15 +39,11 @@ El comando de certificados crea `storage/certs/local-ca.crt`. Para evitar advert
 - `npm run dev`: API y frontend en modo desarrollo.
 - `npm run build`: compila frontend y backend.
 - `npm start`: inicia la aplicación compilada.
-- `npm run db:seed`: carga datos demo de forma idempotente.
+- `npm run db:seed`: crea la configuración inicial en una base nueva; no borra ni modifica una instalación existente.
+- `npm run db:cleanup-demo`: muestra los datos demo identificados y, con confirmación explícita, los elimina sin tocar usuarios ni catálogos administrativos.
+- `npm run db:cleanup-all`: muestra y, con confirmación explícita, elimina todos los datos de negocio manteniendo usuarios, roles, permisos y catálogos del sistema.
 - `npm test`: ejecuta pruebas unitarias.
 - `npm run cert:generate`: genera la CA y el certificado HTTPS local.
-
-El reinicio completo de la demo es destructivo y exige una confirmación explícita:
-
-```powershell
-$env:CONFIRM_RESET_DEMO='SI'; npm run db:seed:reset-demo
-```
 
 ## Seguridad y datos
 

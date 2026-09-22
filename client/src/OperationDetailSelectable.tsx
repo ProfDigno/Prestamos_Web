@@ -104,7 +104,7 @@ export default function OperationDetailSelectable() {
       return;
     }
     const text = [
-      "PRÉSTAMOS CDE",
+      "NM CREDITOS",
       "COMPROBANTE DE PAGO #" + receipt.idpago,
       "Cliente: " + data.nombre_completo,
       "C.I.: " + data.cedula,
@@ -135,7 +135,7 @@ export default function OperationDetailSelectable() {
     <main className="page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">PRÉSTAMOS CDE</p>
+          <p className="eyebrow">NM CREDITOS</p>
           <h1>{data.nombre_completo}</h1>
           <p className="muted">
             {data.tipo === "PRESTAMO" ? "Préstamo" : "Venta financiada"} ·{" "}

@@ -8,7 +8,8 @@
     "build": "npm run build -w client && npm run build -w server",
     "start": "npm run start -w server",
     "db:seed": "npm run db:seed -w server",
-    "db:seed:reset-demo": "npm run db:seed:reset-demo -w server",
+    "db:cleanup-demo": "npm run db:cleanup-demo -w server",
+    "db:cleanup-all": "npm run db:cleanup-all -w server",
     "cert:generate": "npm run cert:generate -w server",
     "test": "npm run test -w server && npm run test -w client"
   },

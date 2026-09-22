@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:seed": "tsx src/seed.ts",
-    "db:seed:reset-demo": "tsx src/seed.ts --reset-demo",
+    "db:cleanup-demo": "tsx src/cleanup-demo.ts",
+    "db:cleanup-all": "tsx src/cleanup-all.ts",
     "cert:generate": "tsx src/certificate.ts",
     "test": "vitest run src"
   },

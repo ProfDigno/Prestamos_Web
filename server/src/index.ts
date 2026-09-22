@@ -384,7 +384,7 @@ app.post('/api/cuotas/:id/notificar', asyncRoute(async (req, res) => {
     const notifiedAt = timestamp();
     await db.query('UPDATE cuota SET fecha_notificado=$1 WHERE idcuota=$2', [notifiedAt, q.idcuota]);
     const texto = [
-      'PRÉSTAMOS CDE',
+      'NM CREDITOS',
       'RECORDATORIO DE PAGO',
       `Cliente: ${q.nombre_completo}`,
       `C.I.: ${q.cedula}`,
