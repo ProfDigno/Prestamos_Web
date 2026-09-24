@@ -15,7 +15,7 @@ export const config = {
   port: Number(process.env.PORT ?? 3443),
   httpPort: Number(process.env.HTTP_PORT ?? 3000),
   origin: process.env.APP_ORIGIN ?? 'https://localhost:3443',
-  timezone: process.env.APP_TIMEZONE ?? 'America/Asuncion',
+  timezone: process.env.APP_TIMEZONE ?? 'America/Argentina/Buenos_Aires',
   lanHost: process.env.LAN_HOST ?? 'localhost',
   sessionSecret: process.env.SESSION_SECRET ?? 'desarrollo-cambiar-prestamos-cde-2026',
   db: {

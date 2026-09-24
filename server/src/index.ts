@@ -20,6 +20,7 @@ import { allocatePayment, calculateBrokerCommission, calculateFlatLoan, calculat
 import { analyticsPercentage, resolveAnalyticsRange } from './analytics.js';
 
 const app = express();
+const useDevFrontend=process.argv.includes('--dev-server');
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '1mb' }));
@@ -405,14 +406,14 @@ app.get('/api/clientes', asyncRoute(async (req, res) => {
   const q = String(req.query.q ?? '').trim();
   const result = await pool.query(`SELECT c.*,
     (SELECT COUNT(*) FROM operacion_financiera o WHERE o.fk_idcliente=c.idcliente AND o.activo) AS operaciones
-    FROM cliente c WHERE c.activo AND ($1='' OR c.nombre_completo ILIKE '%'||$1||'%' OR c.cedula ILIKE '%'||$1||'%')
+    FROM cliente c WHERE ($1='' OR c.nombre_completo ILIKE '%'||$1||'%' OR c.cedula ILIKE '%'||$1||'%')
     ORDER BY c.nombre_completo`, [q]);
   res.json(result.rows);
 }));
 
 app.get('/api/clientes/:id', asyncRoute(async (req, res) => {
   const [client, refs, files] = await Promise.all([
-    pool.query('SELECT * FROM cliente WHERE idcliente=$1 AND activo', [req.params.id]),
+    pool.query('SELECT * FROM cliente WHERE idcliente=$1', [req.params.id]),
     pool.query('SELECT * FROM cliente_referencia WHERE fk_idcliente=$1 AND activo ORDER BY posicion', [req.params.id]),
     pool.query(`SELECT ca.*, a.nombre_original, a.tipo_mime FROM cliente_archivo ca JOIN archivo a ON a.idarchivo=ca.fk_idarchivo WHERE ca.fk_idcliente=$1 AND ca.activo`, [req.params.id]),
   ]);
@@ -461,9 +462,10 @@ app.patch('/api/clientes/:id', requirePermission('CLIENTE_EDITAR'), asyncRoute(a
   const entries=Object.entries(req.body).filter(([k])=>allowed.includes(k));
   if(!entries.length) return res.status(400).json({error:'Sin campos para actualizar'});
   const values=entries.map(([,v])=>v===''?null:v); const sets=entries.map(([k],i)=>`${k}=$${i+1}`);
-  const result=await pool.query(`UPDATE cliente SET ${sets.join(',')} WHERE idcliente=$${values.length+1} AND activo RETURNING *`,[...values,req.params.id]);
+  const result=await pool.query(`UPDATE cliente SET ${sets.join(',')} WHERE idcliente=$${values.length+1} RETURNING *`,[...values,req.params.id]);
   if(!result.rows[0]) return res.status(404).json({error:'Cliente no encontrado'}); res.json(result.rows[0]);
 }));
+app.patch('/api/clientes/:id/estado', requirePermission('CLIENTE_EDITAR'), asyncRoute(async (req,res)=>{const d=z.object({activo:z.boolean()}).parse(req.body);const result=await pool.query('UPDATE cliente SET activo=$1 WHERE idcliente=$2 RETURNING idcliente,activo',[d.activo,req.params.id]);if(!result.rows[0])return res.status(404).json({error:'Cliente no encontrado'});res.json(result.rows[0]);}));
 app.patch('/api/clientes/:id/referencias', requirePermission('CLIENTE_EDITAR'), asyncRoute(async (req,res)=>{
   const refs=z.array(z.object({idcliente_referencia:z.number().int().optional(),posicion:z.number().int().min(1).max(1),nombre_completo:z.string().min(3),telefono:z.string().min(3),direccion:z.string().nullish(),fk_idtipo_referencia:z.number().int().positive()})).length(1).parse(req.body.referencias);
   await transaction(async db=>{await db.query('UPDATE cliente_referencia SET activo=FALSE WHERE fk_idcliente=$1 AND posicion>1 AND activo',[req.params.id]);for(const ref of refs){const type=await db.query('SELECT 1 FROM tipo_referencia WHERE idtipo_referencia=$1 AND activo',[ref.fk_idtipo_referencia]);if(!type.rows[0])throw new Error('Tipo de referencia inválido');await db.query('UPDATE cliente_referencia SET activo=TRUE,nombre_completo=$1,telefono=$2,direccion=$3,fk_idtipo_referencia=$4,relacion=(SELECT nombre FROM tipo_referencia WHERE idtipo_referencia=$4) WHERE fk_idcliente=$5 AND posicion=$6',[ref.nombre_completo,ref.telefono,ref.direccion||null,ref.fk_idtipo_referencia,req.params.id,ref.posicion]);}});
@@ -508,20 +510,20 @@ app.post('/api/clientes/:id/cedula', requirePermission('CLIENTE_EDITAR'), cedula
 app.get('/api/archivos/:id', asyncRoute(async(req,res)=>{const result=await pool.query('SELECT * FROM archivo WHERE idarchivo=$1 AND activo',[req.params.id]);const row=result.rows[0];if(!row||!fs.existsSync(row.ruta))return res.status(404).json({error:'Archivo no encontrado'});res.type(row.tipo_mime).download(row.ruta,row.nombre_original);}));
 
 app.get('/api/operaciones', asyncRoute(async(req,res)=>{
-  const tipo=String(req.query.tipo??''); const estado=String(req.query.estado??''); const cliente=String(req.query.cliente??'').trim();
-  const result=await pool.query(`SELECT o.*,c.nombre_completo,c.telefono1,p.idprestamo,v.idventa_financiada,pp.frecuencia,
+  const tipo=String(req.query.tipo??''); const estado=String(req.query.estado??''); const cliente=String(req.query.cliente??'').trim(); const clienteId=String(req.query.clienteId??'').trim();
+  const result=await pool.query(`SELECT o.*,c.nombre_completo,c.telefono1,p.idprestamo,p.fk_idforma_pago AS prestamo_fk_idforma_pago,fp_p.nombre AS prestamo_forma_pago,v.idventa_financiada,v.fk_idforma_pago AS venta_fk_idforma_pago,COALESCE(fp_v.nombre,(SELECT nombre FROM forma_pago WHERE codigo='EFECTIVO' LIMIT 1)) AS venta_forma_pago,pp.frecuencia,
     co.nombre_completo AS corredor_nombre,oc.porcentaje_comision,oc.monto_comision,
     COALESCE((SELECT SUM(pa.monto_interes+pa.monto_capital) FROM pago_aplicacion pa JOIN pago pg ON pg.idpago=pa.fk_idpago WHERE pg.fk_idoperacion_financiera=o.idoperacion_financiera AND pa.activo AND pg.activo AND pg.estado='CONFIRMADO'),0) AS total_pagado,
     (SELECT MIN(fecha_vencimiento) FROM cuota q WHERE q.fk_idoperacion_financiera=o.idoperacion_financiera AND q.activo AND q.estado IN ('PENDIENTE','PARCIAL','VENCIDA')) AS proximo_vencimiento,
     (SELECT COUNT(*) FROM cuota q WHERE q.fk_idoperacion_financiera=o.idoperacion_financiera AND q.activo AND q.estado='PAGADA') AS cuotas_pagadas
-    FROM operacion_financiera o JOIN cliente c ON c.idcliente=o.fk_idcliente LEFT JOIN prestamo p ON p.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN venta_financiada v ON v.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN plan_pago pp ON pp.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN operacion_corredor oc ON oc.fk_idoperacion_financiera=o.idoperacion_financiera AND oc.activo LEFT JOIN corredor co ON co.idcorredor=oc.fk_idcorredor
-    WHERE o.activo AND ($1='' OR o.tipo=$1) AND ($2='' OR o.estado=$2) AND ($3='' OR c.nombre_completo ILIKE '%'||$3||'%' OR c.cedula ILIKE '%'||$3||'%') ORDER BY o.fecha_inicio DESC,o.idoperacion_financiera DESC`,[tipo,estado,cliente]);
+    FROM operacion_financiera o JOIN cliente c ON c.idcliente=o.fk_idcliente LEFT JOIN prestamo p ON p.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN forma_pago fp_p ON fp_p.idforma_pago=p.fk_idforma_pago LEFT JOIN venta_financiada v ON v.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN forma_pago fp_v ON fp_v.idforma_pago=v.fk_idforma_pago LEFT JOIN plan_pago pp ON pp.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN operacion_corredor oc ON oc.fk_idoperacion_financiera=o.idoperacion_financiera AND oc.activo LEFT JOIN corredor co ON co.idcorredor=oc.fk_idcorredor
+    WHERE o.activo AND ($1='' OR o.tipo=$1) AND ($2='' OR o.estado=$2) AND ($3='' OR c.nombre_completo ILIKE '%'||$3||'%' OR c.cedula ILIKE '%'||$3||'%') AND ($4='' OR c.idcliente=CAST(NULLIF($4,'') AS integer)) ORDER BY o.fecha_inicio DESC,o.idoperacion_financiera DESC`,[tipo,estado,cliente,clienteId]);
   res.json(result.rows.map(r=>({...r,saldo:new Decimal(r.monto_total).minus(r.total_pagado).toFixed(2)})));
 }));
 
 app.get('/api/operaciones/:id', asyncRoute(async(req,res)=>{
-  const operation=await pool.query(`SELECT o.*,c.nombre_completo,c.cedula,c.telefono1,pp.idplan_pago,pp.frecuencia,p.idprestamo,v.idventa_financiada,v.fk_idproducto,v.cantidad AS producto_cantidad,v.precio_unitario AS producto_precio_unitario,v.precio_contado AS producto_precio_contado,pr.nombre AS producto,pr.codigo AS producto_codigo,co.nombre_completo AS corredor_nombre,oc.porcentaje_comision,oc.monto_comision
-    FROM operacion_financiera o JOIN cliente c ON c.idcliente=o.fk_idcliente JOIN plan_pago pp ON pp.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN prestamo p ON p.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN venta_financiada v ON v.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN producto pr ON pr.idproducto=v.fk_idproducto LEFT JOIN operacion_corredor oc ON oc.fk_idoperacion_financiera=o.idoperacion_financiera AND oc.activo LEFT JOIN corredor co ON co.idcorredor=oc.fk_idcorredor WHERE o.idoperacion_financiera=$1 AND o.activo`,[req.params.id]);
+  const operation=await pool.query(`SELECT o.*,c.nombre_completo,c.cedula,c.telefono1,pp.idplan_pago,pp.frecuencia,p.idprestamo,p.fk_idforma_pago AS prestamo_fk_idforma_pago,fp_p.nombre AS prestamo_forma_pago,v.idventa_financiada,v.fk_idforma_pago AS venta_fk_idforma_pago,COALESCE(fp_v.nombre,(SELECT nombre FROM forma_pago WHERE codigo='EFECTIVO' LIMIT 1)) AS venta_forma_pago,v.fk_idproducto,v.cantidad AS producto_cantidad,v.precio_unitario AS producto_precio_unitario,v.precio_contado AS producto_precio_contado,pr.nombre AS producto,pr.codigo AS producto_codigo,co.nombre_completo AS corredor_nombre,oc.porcentaje_comision,oc.monto_comision
+    FROM operacion_financiera o JOIN cliente c ON c.idcliente=o.fk_idcliente JOIN plan_pago pp ON pp.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN prestamo p ON p.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN forma_pago fp_p ON fp_p.idforma_pago=p.fk_idforma_pago LEFT JOIN venta_financiada v ON v.fk_idoperacion_financiera=o.idoperacion_financiera LEFT JOIN forma_pago fp_v ON fp_v.idforma_pago=v.fk_idforma_pago LEFT JOIN producto pr ON pr.idproducto=v.fk_idproducto LEFT JOIN operacion_corredor oc ON oc.fk_idoperacion_financiera=o.idoperacion_financiera AND oc.activo LEFT JOIN corredor co ON co.idcorredor=oc.fk_idcorredor WHERE o.idoperacion_financiera=$1 AND o.activo`,[req.params.id]);
   if(!operation.rows[0])return res.status(404).json({error:'Operación no encontrada'});
   const [cuotas,pagos,aplicaciones,garantia,usuarios]=await Promise.all([
     pool.query(`SELECT q.*,COALESCE(pa.interes_pagado,0) AS interes_pagado,COALESCE(pa.capital_pagado,0) AS capital_pagado
@@ -549,7 +551,7 @@ app.get('/api/operaciones/:id', asyncRoute(async(req,res)=>{
 
 const percentageInput=z.union([z.string(),z.number()]).refine(value => /^\d+(\.\d{1,4})?$/.test(String(value)) && Number(value) >= 0, 'El porcentaje debe ser un número no negativo con hasta 4 decimales');
 const commissionInput=z.union([z.string(),z.number()]).refine(value => /^\d+(\.\d{1,4})?$/.test(String(value)) && Number(value) >= 0 && Number(value) <= 100, 'La comisión debe estar entre 0 y 100% con hasta 4 decimales');
-const operationSchema=z.object({fk_idcliente:z.number().int(),fk_idcorredor:z.number().int().positive().optional(),fecha_inicio:z.string(),monto_capital:z.union([z.string(),z.number()]),porcentaje_interes:percentageInput,monto_interes_objetivo:decimalInput.optional(),modo_interes:z.enum(['PORCENTAJE','MONTO']).default('PORCENTAJE'),cantidad_cuotas:z.number().int().positive(),frecuencia:z.enum(['DIARIA','SEMANAL','QUINCENAL','MENSUAL']),dias_semana:z.array(z.number().int()).optional(),dias_mes:z.array(z.number().int()).optional(),observacion:z.string().optional(),usuarios:z.array(z.number().int()).default([]),garantia:z.object({tipo_objeto:z.string(),descripcion:z.string(),marca:z.string().optional(),modelo:z.string().optional(),identificador:z.string().optional(),valor_aproximado:z.union([z.string(),z.number()]),valor_tasado:z.union([z.string(),z.number()])}).optional(),fk_idproducto:z.number().int().optional(),cantidad:z.number().int().positive().default(1),precio_contado:z.union([z.string(),z.number()]).optional()}).superRefine((value,ctx)=>{if(value.modo_interes==='MONTO'&&value.monto_interes_objetivo===undefined)ctx.addIssue({code:z.ZodIssueCode.custom,path:['monto_interes_objetivo'],message:'El monto de interés es obligatorio'});});
+const operationSchema=z.object({fk_idcliente:z.number().int(),fk_idforma_pago:z.number().int().positive(),fk_idcorredor:z.number().int().positive().optional(),fecha_inicio:z.string(),monto_capital:z.union([z.string(),z.number()]),porcentaje_interes:percentageInput,monto_interes_objetivo:decimalInput.optional(),modo_interes:z.enum(['PORCENTAJE','MONTO']).default('PORCENTAJE'),cantidad_cuotas:z.number().int().positive(),frecuencia:z.enum(['DIARIA','SEMANAL','QUINCENAL','MENSUAL']),dias_semana:z.array(z.number().int()).optional(),dias_mes:z.array(z.number().int()).optional(),observacion:z.string().optional(),usuarios:z.array(z.number().int()).default([]),garantia:z.object({tipo_objeto:z.string(),descripcion:z.string(),marca:z.string().optional(),modelo:z.string().optional(),identificador:z.string().optional(),valor_aproximado:z.union([z.string(),z.number()]),valor_tasado:z.union([z.string(),z.number()])}).optional(),fk_idproducto:z.number().int().optional(),cantidad:z.number().int().positive().default(1),precio_contado:z.union([z.string(),z.number()]).optional()}).superRefine((value,ctx)=>{if(value.modo_interes==='MONTO'&&value.monto_interes_objetivo===undefined)ctx.addIssue({code:z.ZodIssueCode.custom,path:['monto_interes_objetivo'],message:'El monto de interés es obligatorio'});});
 
 async function ensureCash(db:DbClient,date:string,user:number){const r=await db.query(`INSERT INTO caja (fecha,creado_por) VALUES ($1,$2) ON CONFLICT (fecha) DO UPDATE SET activo=TRUE RETURNING idcaja`,[date,user]);return r.rows[0].idcaja;}
 
@@ -558,8 +560,10 @@ async function createOperation(req:Request,res:Response,type:'PRESTAMO'|'VENTA_F
     ? calculateFlatLoanFromInterestAmount(String(data.monto_capital),String(data.monto_interes_objetivo),data.cantidad_cuotas)
     : calculateFlatLoan(String(data.monto_capital),String(data.porcentaje_interes),data.cantidad_cuotas); const effectivePercentage=calc.percentage; const dates=generateDueDates({fechaInicio:data.fecha_inicio,cantidadCuotas:data.cantidad_cuotas,frecuencia:data.frecuencia as Frecuencia,diasSemana:data.dias_semana,diasMes:data.dias_mes});
   const id=await transaction(async db=>{
-    const c=await db.query(`SELECT c.idcliente,COALESCE(c.tasa_interes_sugerida,(SELECT interes_minimo FROM configuracion_financiera WHERE activo LIMIT 1),0) AS minimo,(SELECT COUNT(*) FROM cliente_referencia r WHERE r.fk_idcliente=c.idcliente AND r.activo) AS referencias FROM cliente c WHERE c.idcliente=$1 AND c.activo FOR UPDATE`,[data.fk_idcliente]);
+    const c=await db.query(`SELECT c.idcliente,c.nombre_completo,COALESCE(c.tasa_interes_sugerida,(SELECT interes_minimo FROM configuracion_financiera WHERE activo LIMIT 1),0) AS minimo,(SELECT COUNT(*) FROM cliente_referencia r WHERE r.fk_idcliente=c.idcliente AND r.activo) AS referencias FROM cliente c WHERE c.idcliente=$1 AND c.activo FOR UPDATE`,[data.fk_idcliente]);
     if(!c.rows[0])throw new Error('Cliente no encontrado');if(Number(c.rows[0].referencias)<1)throw new Error('El cliente debe tener al menos una referencia');if(new Decimal(effectivePercentage).lt(c.rows[0].minimo))throw new Error(`El interés mínimo es ${c.rows[0].minimo}%`);
+    const payment=(await db.query('SELECT idforma_pago FROM forma_pago WHERE idforma_pago=$1 AND activo FOR SHARE',[data.fk_idforma_pago])).rows[0];
+    if(!payment)throw new Error('La forma de pago seleccionada no está activa');
     let broker:null|{idcorredor:number;porcentaje_comision:string}=null;
     if(data.fk_idcorredor){const result=await db.query('SELECT idcorredor,porcentaje_comision FROM corredor WHERE idcorredor=$1 AND activo FOR UPDATE',[data.fk_idcorredor]);if(!result.rows[0])throw new Error('El corredor seleccionado no está activo');broker=result.rows[0];}
     const op=await db.query(`INSERT INTO operacion_financiera (fk_idcliente,tipo,fecha_inicio,monto_capital,porcentaje_interes,monto_interes,monto_total,cantidad_cuotas,estado,observacion,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ACTIVA',$9,$10) RETURNING idoperacion_financiera`,[data.fk_idcliente,type,data.fecha_inicio,calc.capital,effectivePercentage,calc.interest,calc.total,data.cantidad_cuotas,data.observacion??null,req.user!.id]);
@@ -568,8 +572,8 @@ async function createOperation(req:Request,res:Response,type:'PRESTAMO'|'VENTA_F
     for(const day of data.dias_mes??[])await db.query('INSERT INTO plan_pago_dia_mes (fk_idplan_pago,dia_mes,creado_por) VALUES ($1,$2,$3)',[plan.rows[0].idplan_pago,day,req.user!.id]);
     for(let i=0;i<dates.length;i++){const q=calc.cuotas[i];await db.query('INSERT INTO cuota (fk_idoperacion_financiera,numero,fecha_vencimiento,monto_capital,monto_interes,monto_total,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7)',[opId,i+1,dates[i],q.montoCapital,q.montoInteres,q.montoTotal,req.user!.id]);}
     for(const userId of [...new Set(data.usuarios)])await db.query('INSERT INTO operacion_usuario (fk_idoperacion_financiera,fk_idusuario,creado_por) VALUES ($1,$2,$3)',[opId,userId,req.user!.id]);
-    if(type==='PRESTAMO'){const p=await db.query('INSERT INTO prestamo (fk_idoperacion_financiera,fecha_desembolso,creado_por) VALUES ($1,$2,$3) RETURNING idprestamo',[opId,data.fecha_inicio,req.user!.id]);if(data.garantia)await db.query(`INSERT INTO garantia (fk_idprestamo,fk_idusuario_tasador,tipo_objeto,descripcion,marca,modelo,identificador,valor_aproximado,valor_tasado,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$2)`,[p.rows[0].idprestamo,req.user!.id,data.garantia.tipo_objeto,data.garantia.descripcion,data.garantia.marca??null,data.garantia.modelo??null,data.garantia.identificador??null,String(data.garantia.valor_aproximado),String(data.garantia.valor_tasado)]);const cashId=await ensureCash(db,data.fecha_inicio,req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idprestamo,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cashId,p.rows[0].idprestamo,calc.capital,'Desembolso de préstamo',`${data.fecha_inicio} 12:00:00`,req.user!.id]);}
-    else{if(!data.fk_idproducto)throw new Error('Producto requerido');await db.query('INSERT INTO venta_financiada (fk_idoperacion_financiera,fk_idproducto,cantidad,precio_unitario,precio_contado,creado_por) VALUES ($1,$2,$3,$4,$5,$6)',[opId,data.fk_idproducto,data.cantidad,new Decimal(data.monto_capital).div(data.cantidad).toFixed(2),String(data.precio_contado??data.monto_capital),req.user!.id]);}
+     if(type==='PRESTAMO'){const p=await db.query('INSERT INTO prestamo (fk_idoperacion_financiera,fecha_desembolso,fk_idforma_pago,creado_por) VALUES ($1,$2,$3,$4) RETURNING idprestamo',[opId,data.fecha_inicio,data.fk_idforma_pago,req.user!.id]);if(data.garantia)await db.query(`INSERT INTO garantia (fk_idprestamo,fk_idusuario_tasador,tipo_objeto,descripcion,marca,modelo,identificador,valor_aproximado,valor_tasado,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$2)`,[p.rows[0].idprestamo,req.user!.id,data.garantia.tipo_objeto,data.garantia.descripcion,data.garantia.marca??null,data.garantia.modelo??null,data.garantia.identificador??null,String(data.garantia.valor_aproximado),String(data.garantia.valor_tasado)]);const cashDate=today();const cashId=await ensureCash(db,cashDate,req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idprestamo,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cashId,p.rows[0].idprestamo,calc.capital,`Desembolso de préstamo - ${c.rows[0].nombre_completo}`.slice(0,250),timestamp(),req.user!.id]);}
+     else{if(!data.fk_idproducto)throw new Error('Producto requerido');const v=await db.query('INSERT INTO venta_financiada (fk_idoperacion_financiera,fk_idproducto,cantidad,precio_unitario,precio_contado,fk_idforma_pago,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING idventa_financiada',[opId,data.fk_idproducto,data.cantidad,new Decimal(data.monto_capital).div(data.cantidad).toFixed(2),String(data.precio_contado??data.monto_capital),data.fk_idforma_pago,req.user!.id]);const cashDate=today();const cashId=await ensureCash(db,cashDate,req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idventa_financiada,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cashId,v.rows[0].idventa_financiada,String(data.monto_capital),`Venta financiada - ${c.rows[0].nombre_completo}`.slice(0,250),timestamp(),req.user!.id]);}
     return opId;
   });res.status(201).json({idoperacion_financiera:id});
 }
@@ -580,7 +584,7 @@ app.post('/api/operaciones/:id/pagos',requirePermission('PAGO_CREAR'),asyncRoute
   const data=z.object({monto:z.union([z.string(),z.number()]).optional(),cuota_ids:z.array(z.number().int().positive()).optional(),modo:z.enum(['TOTAL','INTERES']).default('TOTAL'),descuento_general:z.union([z.string(),z.number()]).optional(),fk_idforma_pago:z.number().int(),referencia:z.string().optional(),observacion:z.string().optional()}).parse(req.body);
   if(data.modo==='INTERES'&&!data.cuota_ids?.length)throw new Error('El modo solo interés requiere seleccionar cuotas');
   const id=await transaction(async db=>{
-    const op=await db.query('SELECT * FROM operacion_financiera WHERE idoperacion_financiera=$1 AND activo FOR UPDATE',[req.params.id]);
+    const op=await db.query('SELECT o.*,c.nombre_completo AS cliente_nombre FROM operacion_financiera o JOIN cliente c ON c.idcliente=o.fk_idcliente WHERE o.idoperacion_financiera=$1 AND o.activo FOR UPDATE',[req.params.id]);
     if(!op.rows[0])throw new Error('Operación no encontrada');
     const installments=await db.query(`SELECT q.*,COALESCE(pa.interes_pagado,0) AS interes_pagado,COALESCE(pa.capital_pagado,0) AS capital_pagado
       FROM cuota q LEFT JOIN (
@@ -613,7 +617,7 @@ app.post('/api/operaciones/:id/pagos',requirePermission('PAGO_CREAR'),asyncRoute
     for(const item of after){let due=item.interestDue.plus(item.capitalDue);let applied=new Decimal(0);if(discountRemaining.gt(0)&&due.gt(0)){applied=Decimal.min(discountRemaining,due);discountRemaining=discountRemaining.minus(applied);await db.query('INSERT INTO descuento_aplicacion (fk_iddescuento_operacion,fk_idcuota,monto,creado_por) VALUES ($1,$2,$3,$4)',[discountId,item.q.idcuota,applied.toFixed(2),req.user!.id]);due=due.minus(applied);}const dueDate=item.q.fecha_vencimiento instanceof Date?DateTime.fromJSDate(item.q.fecha_vencimiento).toISODate():DateTime.fromISO(String(item.q.fecha_vencimiento)).toISODate();const status=due.eq(0)?'PAGADA':(dueDate&&dueDate<today()?'VENCIDA':'PENDIENTE');await db.query('UPDATE cuota SET estado=$1,fecha_pago=CASE WHEN $2 THEN COALESCE(fecha_pago,CURRENT_TIMESTAMP) ELSE NULL END,fecha_pago_interes=CASE WHEN $3 THEN COALESCE(fecha_pago_interes,CURRENT_TIMESTAMP) ELSE fecha_pago_interes END WHERE idcuota=$4',[status,status==='PAGADA',item.interestDue.eq(0),item.q.idcuota]);}
     const remainingBalance=installments.rows.reduce((sum,q)=>sum.plus(new Decimal(q.monto_total).minus(q.interes_pagado).minus(q.capital_pagado)),new Decimal(0)).minus(amount).minus(discount);
     if(remainingBalance.lte(0))await db.query(`UPDATE operacion_financiera SET estado='PAGADA' WHERE idoperacion_financiera=$1`,[req.params.id]);
-    const cashId=await ensureCash(db,today(),req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idpago,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'INGRESO',$3,$4,$5,$6)`,[cashId,payment.rows[0].idpago,amount.toFixed(2),'Cobro de operación',timestamp(),req.user!.id]);
+    const cashId=await ensureCash(db,today(),req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idpago,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'INGRESO',$3,$4,$5,$6)`,[cashId,payment.rows[0].idpago,amount.toFixed(2),`Cobro de operación - ${op.rows[0].cliente_nombre}`.slice(0,250),timestamp(),req.user!.id]);
     if(discountId)await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_iddescuento_operacion,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cashId,discountId,discount.toFixed(2),'Descuento general de liquidación',timestamp(),req.user!.id]);
     return payment.rows[0].idpago;
   });
@@ -662,11 +666,34 @@ app.get('/api/corredores/:id/operaciones',requirePermission('ADMINISTRAR'),async
 app.post('/api/corredores',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre_completo:z.string().trim().min(3),cedula:z.string().trim().min(3),telefono:z.string().trim().min(3),email:z.string().trim().email().or(z.literal('')).optional(),porcentaje_comision:commissionInput}).parse(req.body);const r=await pool.query('INSERT INTO corredor(nombre_completo,cedula,telefono,email,porcentaje_comision,creado_por) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[d.nombre_completo,d.cedula,d.telefono,d.email||null,String(d.porcentaje_comision),req.user!.id]);res.status(201).json(r.rows[0]);}));
 app.patch('/api/corredores/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre_completo:z.string().trim().min(3).optional(),cedula:z.string().trim().min(3).optional(),telefono:z.string().trim().min(3).optional(),email:z.string().trim().email().or(z.literal('')).nullish(),porcentaje_comision:commissionInput.optional()}).strict().parse(req.body);if(!Object.keys(d).length)return res.status(400).json({error:'Sin cambios'});const entries=Object.entries(d);const values=entries.map(([,value])=>value??null);const sets=entries.map(([key],index)=>`${key}=$${index+1}`);const r=await pool.query(`UPDATE corredor SET ${sets.join(',')} WHERE idcorredor=$${values.length+1} RETURNING *`,[...values,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Corredor no encontrado'});res.json(r.rows[0]);}));
 app.patch('/api/corredores/:id/estado',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({activo:z.boolean()}).parse(req.body);const r=await pool.query('UPDATE corredor SET activo=$1 WHERE idcorredor=$2 RETURNING idcorredor,activo',[d.activo,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Corredor no encontrado'});res.json(r.rows[0]);}));
-app.get('/api/productos',asyncRoute(async(_q,res)=>simpleList(res,'SELECT * FROM producto WHERE activo ORDER BY nombre')));
+app.get('/api/productos',asyncRoute(async(_q,res)=>simpleList(res,'SELECT * FROM producto ORDER BY nombre')));
 app.post('/api/productos',requirePermission('PRODUCTO_EDITAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string(),nombre:z.string(),descripcion:z.string().optional(),precio_referencia:z.union([z.string(),z.number()])}).parse(req.body);const r=await pool.query('INSERT INTO producto (codigo,nombre,descripcion,precio_referencia,creado_por) VALUES ($1,$2,$3,$4,$5) RETURNING *',[d.codigo,d.nombre,d.descripcion??null,String(d.precio_referencia),req.user!.id]);res.status(201).json(r.rows[0]);}));
-app.patch('/api/productos/:id',requirePermission('PRODUCTO_EDITAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre:z.string(),descripcion:z.string().nullish(),precio_referencia:z.union([z.string(),z.number()])}).parse(req.body);const r=await pool.query('UPDATE producto SET nombre=$1,descripcion=$2,precio_referencia=$3 WHERE idproducto=$4 AND activo RETURNING *',[d.nombre,d.descripcion??null,String(d.precio_referencia),req.params.id]);res.json(r.rows[0]);}));
+app.patch('/api/productos/:id',requirePermission('PRODUCTO_EDITAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre:z.string(),descripcion:z.string().nullish(),precio_referencia:z.union([z.string(),z.number()])}).parse(req.body);const r=await pool.query('UPDATE producto SET nombre=$1,descripcion=$2,precio_referencia=$3 WHERE idproducto=$4 RETURNING *',[d.nombre,d.descripcion??null,String(d.precio_referencia),req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Producto no encontrado'});res.json(r.rows[0]);}));
+app.patch('/api/productos/:id/estado',requirePermission('PRODUCTO_EDITAR'),asyncRoute(async(req,res)=>{const d=z.object({activo:z.boolean()}).parse(req.body);const r=await pool.query('UPDATE producto SET activo=$1 WHERE idproducto=$2 RETURNING idproducto,activo',[d.activo,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Producto no encontrado'});res.json(r.rows[0]);}));
 app.delete('/api/productos/:id',requirePermission('PRODUCTO_EDITAR'),asyncRoute(async(req,res)=>{await pool.query('UPDATE producto SET activo=FALSE WHERE idproducto=$1',[req.params.id]);res.status(204).end();}));
-app.get('/api/formas-pago',asyncRoute(async(_q,res)=>simpleList(res,'SELECT * FROM forma_pago WHERE activo ORDER BY nombre')));
+app.get('/api/formas-pago',asyncRoute(async(req,res)=>{
+  const all=req.query.todos==='1';
+  if(all && req.user?.rol!=='Administrador' && !req.user?.permisos.includes('ADMINISTRAR')) return res.status(403).json({error:'No tiene permiso para esta acción'});
+  return simpleList(res,`SELECT * FROM forma_pago ${all?'':'WHERE activo'} ORDER BY nombre`);
+}));
+const paymentMethodSchema=z.object({codigo:z.string().trim().min(1).max(30),nombre:z.string().trim().min(1).max(100),requiere_comprobante:z.boolean()}).strict();
+function paymentMethodError(error:unknown){const pgError=error as {code?:string;constraint?:string};if(pgError.code==='23505')return pgError.constraint==='uq_forma_pago_codigo'?'El código ya existe':'El nombre ya existe';return null;}
+app.post('/api/formas-pago',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{
+  const d=paymentMethodSchema.parse(req.body);
+  try{const r=await pool.query('INSERT INTO forma_pago(codigo,nombre,requiere_comprobante,creado_por) VALUES($1,$2,$3,$4) RETURNING *',[d.codigo,d.nombre,d.requiere_comprobante,req.user!.id]);res.status(201).json(r.rows[0]);}
+  catch(error){const message=paymentMethodError(error);if(message)return res.status(409).json({error:message});throw error;}
+}));
+app.patch('/api/formas-pago/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{
+  const d=paymentMethodSchema.parse(req.body);
+  try{const r=await pool.query('UPDATE forma_pago SET codigo=$1,nombre=$2,requiere_comprobante=$3 WHERE idforma_pago=$4 RETURNING *',[d.codigo,d.nombre,d.requiere_comprobante,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Forma de pago no encontrada'});res.json(r.rows[0]);}
+  catch(error){const message=paymentMethodError(error);if(message)return res.status(409).json({error:message});throw error;}
+}));
+app.patch('/api/formas-pago/:id/estado',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{
+  const d=z.object({activo:z.boolean()}).strict().parse(req.body);
+  const r=await pool.query('UPDATE forma_pago SET activo=$1 WHERE idforma_pago=$2 RETURNING idforma_pago,activo',[d.activo,req.params.id]);
+  if(!r.rows[0])return res.status(404).json({error:'Forma de pago no encontrada'});
+  res.json(r.rows[0]);
+}));
 const userResponse=`u.idusuario,u.login,u.nombres,u.apellidos,u.cedula,u.email,u.activo,u.fk_idrol,r.nombre AS rol`;
 app.get('/api/usuarios',requirePermission('ADMINISTRAR'),asyncRoute(async(_q,res)=>simpleList(res,`SELECT ${userResponse} FROM usuario u JOIN rol r ON r.idrol=u.fk_idrol ORDER BY u.nombres,u.apellidos`)));
 app.post('/api/usuarios',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({fk_idrol:z.number().int().positive(),login:z.string().trim().email(),password:z.string().min(8),nombres:z.string().trim().min(2),apellidos:z.string().trim().min(2),cedula:z.string().trim().min(3),email:z.string().trim().email().or(z.literal('')).optional()}).parse(req.body);const role=await pool.query('SELECT idrol FROM rol WHERE idrol=$1 AND activo',[d.fk_idrol]);if(!role.rows[0])throw new Error('El rol seleccionado no está activo');const hash=await bcrypt.hash(d.password,12);const r=await pool.query('INSERT INTO usuario(fk_idrol,login,password_hash,nombres,apellidos,cedula,email,creado_por) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING idusuario,login,nombres,apellidos,cedula,email,activo,fk_idrol',[d.fk_idrol,d.login,hash,d.nombres,d.apellidos,d.cedula,d.email||d.login,req.user!.id]);res.status(201).json(r.rows[0]);}));
@@ -682,24 +709,100 @@ app.get('/api/eventos',requirePermission('ADMINISTRAR'),asyncRoute(async(_q,res)
 app.post('/api/eventos',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string().trim().min(2),modulo:z.string().trim().min(2),nombre:z.string().trim().min(2),descripcion:z.string().trim().nullish()}).parse(req.body);const r=await pool.query('INSERT INTO evento(codigo,modulo,nombre,descripcion,creado_por) VALUES($1,$2,$3,$4,$5) RETURNING *',[d.codigo,d.modulo,d.nombre,d.descripcion||null,req.user!.id]);res.status(201).json(r.rows[0]);}));
 app.patch('/api/eventos/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string().trim().min(2).optional(),modulo:z.string().trim().min(2).optional(),nombre:z.string().trim().min(2).optional(),descripcion:z.string().trim().nullish()}).strict().parse(req.body);if(!Object.keys(d).length)return res.status(400).json({error:'Sin cambios'});const entries=Object.entries(d);const values=entries.map(([,value])=>value??null);const sets=entries.map(([key],index)=>`${key}=$${index+1}`);const r=await pool.query(`UPDATE evento SET ${sets.join(',')} WHERE idevento=$${values.length+1} RETURNING *`,[...values,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Evento no encontrado'});res.json(r.rows[0]);}));
 app.patch('/api/eventos/:id/estado',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({activo:z.boolean()}).parse(req.body);const r=await pool.query('UPDATE evento SET activo=$1 WHERE idevento=$2 RETURNING idevento,activo',[d.activo,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Evento no encontrado'});res.json(r.rows[0]);}));
-app.get('/api/bancos',asyncRoute(async(_q,res)=>simpleList(res,'SELECT * FROM banco WHERE activo ORDER BY nombre')));
-app.post('/api/bancos',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string().min(2),nombre:z.string().min(2)}).parse(req.body);const r=await pool.query('INSERT INTO banco(codigo,nombre,creado_por) VALUES($1,$2,$3) RETURNING *',[d.codigo,d.nombre,req.user!.id]);res.status(201).json(r.rows[0]);}));
+app.get('/api/bancos',asyncRoute(async(req,res)=>simpleList(res,`SELECT * FROM banco ${req.query.todos==='1'?'':'WHERE activo'} ORDER BY nombre`)));
+app.post('/api/bancos',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string().trim().min(2).max(30),nombre:z.string().trim().min(2).max(100)}).strict().parse(req.body);const r=await pool.query('INSERT INTO banco(codigo,nombre,creado_por) VALUES($1,$2,$3) RETURNING *',[d.codigo,d.nombre,req.user!.id]);res.status(201).json(r.rows[0]);}));
+app.patch('/api/bancos/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({codigo:z.string().trim().min(2).max(30),nombre:z.string().trim().min(2).max(100)}).strict().parse(req.body);const r=await pool.query('UPDATE banco SET codigo=$1,nombre=$2 WHERE idbanco=$3 RETURNING *',[d.codigo,d.nombre,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Banco no encontrado'});res.json(r.rows[0]);}));
+app.patch('/api/bancos/:id/estado',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({activo:z.boolean()}).strict().parse(req.body);const r=await pool.query('UPDATE banco SET activo=$1 WHERE idbanco=$2 RETURNING idbanco,activo',[d.activo,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Banco no encontrado'});res.json(r.rows[0]);}));
 app.delete('/api/bancos/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{await pool.query('UPDATE banco SET activo=FALSE WHERE idbanco=$1',[req.params.id]);res.status(204).end();}));
 app.get('/api/configuracion',asyncRoute(async(_q,res)=>simpleList(res,'SELECT idconfiguracion_financiera, trunc(interes_minimo)::integer AS interes_minimo, moneda, fecha_creado, creado_por, activo FROM configuracion_financiera WHERE activo LIMIT 1')));
 app.patch('/api/configuracion/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({interes_minimo:integerInput,moneda:z.literal('PYG')}).parse(req.body);const r=await pool.query('UPDATE configuracion_financiera SET interes_minimo=$1,moneda=$2 WHERE idconfiguracion_financiera=$3 AND activo RETURNING *',[String(d.interes_minimo),d.moneda,req.params.id]);res.json(r.rows[0]);}));
-app.get('/api/gasto-tipos',asyncRoute(async(_q,res)=>simpleList(res,'SELECT * FROM gasto_tipo WHERE activo ORDER BY nombre')));
+app.get('/api/gasto-tipos',asyncRoute(async(req,res)=>simpleList(res,`SELECT * FROM gasto_tipo ${req.query.todos === '1' ? '' : 'WHERE activo'} ORDER BY nombre`)));
 app.post('/api/gasto-tipos',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre:z.string().min(2),descripcion:z.string().optional()}).parse(req.body);const r=await pool.query('INSERT INTO gasto_tipo(nombre,descripcion,creado_por) VALUES($1,$2,$3) RETURNING *',[d.nombre,d.descripcion??null,req.user!.id]);res.status(201).json(r.rows[0]);}));
-app.get('/api/gastos',asyncRoute(async(req,res)=>simpleList(res,`SELECT g.*,gt.nombre tipo FROM gasto g JOIN gasto_tipo gt ON gt.idgasto_tipo=g.fk_idgasto_tipo WHERE g.activo AND ($1='' OR g.fecha=$1::date) ORDER BY g.fecha DESC,g.idgasto DESC`,[String(req.query.fecha??'')])));
-app.post('/api/gastos',requirePermission('GASTO_CREAR'),asyncRoute(async(req,res)=>{const d=z.object({fk_idgasto_tipo:z.number().int(),fecha:z.string(),concepto:z.string(),monto:z.union([z.string(),z.number()]),observacion:z.string().optional()}).parse(req.body);const id=await transaction(async db=>{const g=await db.query('INSERT INTO gasto (fk_idgasto_tipo,fecha,concepto,monto,observacion,creado_por) VALUES ($1,$2,$3,$4,$5,$6) RETURNING idgasto',[d.fk_idgasto_tipo,d.fecha,d.concepto,String(d.monto),d.observacion??null,req.user!.id]);const cash=await ensureCash(db,d.fecha,req.user!.id);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idgasto,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cash,g.rows[0].idgasto,String(d.monto),d.concepto,`${d.fecha} 12:00:00`,req.user!.id]);return g.rows[0].idgasto;});res.status(201).json({idgasto:id});}));
-app.get('/api/caja',asyncRoute(async(req,res)=>{const date=String(req.query.fecha??today());const r=await pool.query(`SELECT c.idcaja,c.fecha,mc.*,CASE WHEN mc.tipo='INGRESO' THEN mc.monto ELSE -mc.monto END AS efecto FROM caja c LEFT JOIN movimiento_caja mc ON mc.fk_idcaja=c.idcaja AND mc.activo WHERE c.fecha=$1 ORDER BY mc.fecha_movimiento,mc.idmovimiento_caja`,[date]);const rows=r.rows;const ingreso=rows.reduce((s,x)=>x.tipo==='INGRESO'?s.plus(x.monto):s,new Decimal(0));const egreso=rows.reduce((s,x)=>x.tipo==='EGRESO'?s.plus(x.monto):s,new Decimal(0));res.json({fecha:date,movimientos:rows.filter(x=>x.idmovimiento_caja),ingresos:ingreso.toFixed(2),egresos:egreso.toFixed(2),saldo:ingreso.minus(egreso).toFixed(2)});}));
+app.patch('/api/gasto-tipos/:id',requirePermission('ADMINISTRAR'),asyncRoute(async(req,res)=>{const d=z.object({nombre:z.string().min(2).optional(),descripcion:z.string().nullish(),activo:z.boolean().optional()}).strict().parse(req.body);const entries=Object.entries(d);if(!entries.length)return res.status(400).json({error:'Sin cambios'});const values=entries.map(([,value])=>value??null);const sets=entries.map(([key],index)=>`${key}=$${index+1}`);const r=await pool.query(`UPDATE gasto_tipo SET ${sets.join(',')} WHERE idgasto_tipo=$${values.length+1} RETURNING *`,[...values,req.params.id]);if(!r.rows[0])return res.status(404).json({error:'Tipo de gasto no encontrado'});res.json(r.rows[0]);}));
+app.get('/api/gastos/analisis',asyncRoute(async(req,res)=>{
+  const range=resolveAnalyticsRange(req.query.desde,req.query.hasta,config.timezone);
+  const params=[range.from,range.to];
+  const [daily,methods,types]=await Promise.all([
+    pool.query(`WITH dias AS (
+      SELECT generate_series($1::date,$2::date,'1 day'::interval)::date AS fecha
+    ), totales AS (
+      SELECT g.fecha,SUM(g.monto) AS monto,COUNT(*)::integer AS cantidad
+      FROM gasto g WHERE g.activo AND g.estado='EMITIDO' AND g.fecha BETWEEN $1::date AND $2::date
+      GROUP BY g.fecha
+    )
+    SELECT to_char(dias.fecha,'YYYY-MM-DD') AS fecha,COALESCE(t.monto,0) AS monto,COALESCE(t.cantidad,0)::integer AS cantidad
+    FROM dias LEFT JOIN totales t ON t.fecha=dias.fecha ORDER BY dias.fecha`,params),
+    pool.query(`SELECT fp.idforma_pago,fp.nombre,COUNT(*)::integer AS cantidad,SUM(g.monto) AS monto
+      FROM gasto g JOIN forma_pago fp ON fp.idforma_pago=g.fk_idforma_pago
+      WHERE g.activo AND g.estado='EMITIDO' AND g.fecha BETWEEN $1::date AND $2::date
+      GROUP BY fp.idforma_pago,fp.nombre ORDER BY monto DESC,fp.nombre`,params),
+    pool.query(`SELECT gt.idgasto_tipo,gt.nombre,COUNT(*)::integer AS cantidad,SUM(g.monto) AS monto
+      FROM gasto g JOIN gasto_tipo gt ON gt.idgasto_tipo=g.fk_idgasto_tipo
+      WHERE g.activo AND g.estado='EMITIDO' AND g.fecha BETWEEN $1::date AND $2::date
+      GROUP BY gt.idgasto_tipo,gt.nombre ORDER BY cantidad DESC,monto DESC,gt.nombre`,params),
+  ]);
+  const total=methods.rows.reduce((sum,row)=>sum.plus(row.monto),new Decimal(0));
+  res.json({
+    periodo:range,
+    total:total.toFixed(2),
+    cantidad:methods.rows.reduce((sum,row)=>sum+Number(row.cantidad),0),
+    por_dia:daily.rows.map(row=>({fecha:row.fecha,monto:String(row.monto),cantidad:Number(row.cantidad)})),
+    por_forma_pago:methods.rows.map(row=>({idforma_pago:row.idforma_pago,nombre:row.nombre,cantidad:Number(row.cantidad),monto:String(row.monto),porcentaje:analyticsPercentage(row.monto,total)})),
+    tipos_frecuentes:types.rows.map(row=>({idgasto_tipo:row.idgasto_tipo,nombre:row.nombre,cantidad:Number(row.cantidad),monto:String(row.monto)})),
+  });
+}));
+app.get('/api/gastos',asyncRoute(async(req,res)=>simpleList(res,`SELECT g.*,gt.nombre tipo,fp.idforma_pago,fp.nombre AS forma_pago,CONCAT_WS(' ',u.nombres,u.apellidos) AS anulado_por_nombre FROM gasto g JOIN gasto_tipo gt ON gt.idgasto_tipo=g.fk_idgasto_tipo JOIN forma_pago fp ON fp.idforma_pago=g.fk_idforma_pago LEFT JOIN usuario u ON u.idusuario=g.anulado_por WHERE ($1='' OR g.fecha=$1::date) ORDER BY g.fecha DESC,g.idgasto DESC`,[String(req.query.fecha??'')])));
+app.post('/api/gastos',requirePermission('GASTO_CREAR'),asyncRoute(async(req,res)=>{const d=z.object({fk_idgasto_tipo:z.number().int(),fk_idforma_pago:z.number().int().positive(),fecha:z.string(),concepto:z.string(),monto:z.union([z.string(),z.number()]),observacion:z.string().optional()}).parse(req.body);const id=await transaction(async db=>{const gastoTipo=(await db.query('SELECT nombre FROM gasto_tipo WHERE idgasto_tipo=$1',[d.fk_idgasto_tipo])).rows[0];if(!gastoTipo)throw new Error('Tipo de gasto no encontrado');const payment=(await db.query('SELECT idforma_pago FROM forma_pago WHERE idforma_pago=$1 AND activo FOR SHARE',[d.fk_idforma_pago])).rows[0];if(!payment)throw new Error('La forma de pago seleccionada no está activa');const g=await db.query('INSERT INTO gasto (fk_idgasto_tipo,fk_idforma_pago,fecha,concepto,monto,observacion,creado_por) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING idgasto',[d.fk_idgasto_tipo,d.fk_idforma_pago,d.fecha,d.concepto,String(d.monto),d.observacion??null,req.user!.id]);const cash=await ensureCash(db,d.fecha,req.user!.id);const conceptoCaja=`Gasto - ${gastoTipo.nombre} - ${d.concepto}`.slice(0,250);await db.query(`INSERT INTO movimiento_caja (fk_idcaja,fk_idgasto,tipo,monto,concepto,fecha_movimiento,creado_por) VALUES ($1,$2,'EGRESO',$3,$4,$5,$6)`,[cash,g.rows[0].idgasto,String(d.monto),conceptoCaja,`${d.fecha} 12:00:00`,req.user!.id]);return g.rows[0].idgasto;});res.status(201).json({idgasto:id});}));
+app.patch('/api/gastos/:id/anular',requirePermission('GASTO_CREAR'),asyncRoute(async(req,res)=>{const d=z.object({motivo_anulacion:z.string().trim().min(1).max(1000)}).parse(req.body);const result=await transaction(async db=>{const gasto=(await db.query('SELECT idgasto,estado FROM gasto WHERE idgasto=$1 FOR UPDATE',[req.params.id])).rows[0];if(!gasto)return {error:{status:404,message:'Gasto no encontrado'}};if(gasto.estado!=='EMITIDO')return {error:{status:409,message:'El gasto ya está anulado'}};const updated=(await db.query(`UPDATE gasto SET estado='ANULADO',monto=0,fecha_anulacion=CURRENT_TIMESTAMP,anulado_por=$1,motivo_anulacion=$2 WHERE idgasto=$3 AND estado='EMITIDO' RETURNING *`,[req.user!.id,d.motivo_anulacion,req.params.id])).rows[0];await db.query(`UPDATE movimiento_caja SET monto=0,concepto=CASE WHEN concepto LIKE 'ANULADO:%' THEN concepto ELSE 'ANULADO: '||concepto END WHERE fk_idgasto=$1`,[req.params.id]);return {gasto:updated};});if(result.error)return res.status(result.error.status).json({error:result.error.message});res.json(result.gasto);}));
+app.get('/api/caja',asyncRoute(async(req,res)=>{const date=String(req.query.fecha??today());const r=await pool.query(`SELECT c.idcaja,c.fecha,mc.*,g.estado AS gasto_estado,g.motivo_anulacion,CASE WHEN mc.fk_iddescuento_operacion IS NOT NULL THEN 'No aplica' ELSE COALESCE(fp.nombre,'—') END AS forma_pago,CASE WHEN mc.tipo='INGRESO' THEN mc.monto ELSE -mc.monto END AS efecto FROM caja c LEFT JOIN movimiento_caja mc ON mc.fk_idcaja=c.idcaja AND mc.activo LEFT JOIN gasto g ON g.idgasto=mc.fk_idgasto LEFT JOIN pago pa ON pa.idpago=mc.fk_idpago LEFT JOIN prestamo pr ON pr.idprestamo=mc.fk_idprestamo LEFT JOIN venta_financiada vf ON vf.idventa_financiada=mc.fk_idventa_financiada LEFT JOIN forma_pago fp ON fp.idforma_pago=COALESCE(pa.fk_idforma_pago,pr.fk_idforma_pago,vf.fk_idforma_pago,g.fk_idforma_pago) WHERE c.fecha=$1 ORDER BY mc.fecha_movimiento,mc.idmovimiento_caja`,[date]);const rows=r.rows;const ingreso=rows.reduce((s,x)=>x.tipo==='INGRESO'?s.plus(x.monto):s,new Decimal(0));const egreso=rows.reduce((s,x)=>x.tipo==='EGRESO'?s.plus(x.monto):s,new Decimal(0));const summary=new Map<string,{forma_pago:string;ingresos:Decimal;egresos:Decimal}>();for(const row of rows.filter(x=>x.idmovimiento_caja)){const key=String(row.forma_pago||'—');const item=summary.get(key)??{forma_pago:key,ingresos:new Decimal(0),egresos:new Decimal(0)};if(row.tipo==='INGRESO')item.ingresos=item.ingresos.plus(row.monto);else item.egresos=item.egresos.plus(row.monto);summary.set(key,item);}const resumen_por_forma_pago=[...summary.values()].sort((a,b)=>a.forma_pago.localeCompare(b.forma_pago)).map(item=>({forma_pago:item.forma_pago,ingresos:item.ingresos.toFixed(2),egresos:item.egresos.toFixed(2),saldo:item.ingresos.minus(item.egresos).toFixed(2)}));res.json({fecha:date,movimientos:rows.filter(x=>x.idmovimiento_caja),resumen_por_forma_pago,ingresos:ingreso.toFixed(2),egresos:egreso.toFixed(2),saldo:ingreso.minus(egreso).toFixed(2)});}));
 
-if(fs.existsSync(config.clientDist)){app.use(express.static(config.clientDist));app.use((req,res,next)=>{if(req.path.startsWith('/api/'))return next();res.sendFile(path.join(config.clientDist,'index.html'));});}
+if(!useDevFrontend&&fs.existsSync(config.clientDist)){app.use(express.static(config.clientDist));app.use((req,res,next)=>{if(req.path.startsWith('/api/'))return next();res.sendFile(path.join(config.clientDist,'index.html'));});}
 
 app.use((error:unknown,_req:Request,res:Response,_next:NextFunction)=>{if(error instanceof PublicFormError)return res.status(error.status).json({error:error.message});if(error instanceof multer.MulterError){if(error.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'La imagen supera el límite de 8 MB. Elegí otra imagen o reducí su tamaño.'});return res.status(400).json({error:'No se pudieron cargar las imágenes de cédula'});}console.error(error);if(error instanceof z.ZodError)return res.status(400).json({error:'Datos inválidos',detalles:error.flatten()});const pgError=error as {code?:string;constraint?:string;message?:string};if(pgError.code==='23505')return res.status(409).json({error:'El registro ya existe',campo:pgError.constraint});if(pgError.code==='23503')return res.status(409).json({error:'El registro está relacionado con otros datos'});res.status(400).json({error:pgError.message??'Error inesperado'});});
 
 export { app };
 
 if(process.env.NODE_ENV!=='test'){
-  const start=async()=>{await pool.query('SELECT 1');fs.mkdirSync(config.uploadDir,{recursive:true});if(fs.existsSync(config.certPath)&&fs.existsSync(config.keyPath)){https.createServer({cert:fs.readFileSync(config.certPath),key:fs.readFileSync(config.keyPath)},app).listen(config.port,config.host,()=>console.log(`Préstamos CDE: https://${config.lanHost}:${config.port}`));http.createServer(app).listen(config.httpPort,config.host,()=>console.log(`Acceso local: http://localhost:${config.httpPort}`));}else{http.createServer(app).listen(config.httpPort,config.host,()=>console.log(`Préstamos CDE: http://localhost:${config.httpPort} (ejecute npm run cert:generate para HTTPS/GPS)`));}};start().catch(error=>{console.error('No se pudo iniciar:',error);process.exit(1);});
+  const start=async()=>{
+    await pool.query('SELECT 1');
+    fs.mkdirSync(config.uploadDir,{recursive:true});
+    const hasCertificate=fs.existsSync(config.certPath)&&fs.existsSync(config.keyPath);
+    const server=hasCertificate
+      ? https.createServer({cert:fs.readFileSync(config.certPath),key:fs.readFileSync(config.keyPath)},app)
+      : http.createServer(app);
+    if(useDevFrontend){
+      const {createServer}=await import('vite');
+      const {default:react}=await import('@vitejs/plugin-react');
+      const clientRoot=path.resolve(config.clientDist,'..');
+      const vite=await createServer({
+        root:clientRoot,
+        configFile:false,
+        plugins:[react()],
+        appType:'custom',
+        server:{middlewareMode:true,ws:{server},proxy:{}},
+      });
+      app.use(vite.middlewares);
+      app.use(async(req,res,next)=>{
+        if(req.path.startsWith('/api/'))return next();
+        try{
+          const template=fs.readFileSync(path.join(clientRoot,'index.html'),'utf8');
+          const html=await vite.transformIndexHtml(req.originalUrl,template);
+          res.status(200).type('html').send(html);
+        }catch(error){next(error);}
+      });
+    }
+    const listenPort=config.nodeEnv==='production'&&!hasCertificate?config.httpPort:config.port;
+    const listenHost=config.nodeEnv==='production'&&!hasCertificate?'127.0.0.1':config.host;
+    server.listen(listenPort,listenHost,()=>{
+      const protocol=hasCertificate?'https':'http';
+      console.log(`Préstamos CDE: ${protocol}://localhost:${listenPort}`);
+      if(config.lanHost!=='localhost'&&listenHost!=='127.0.0.1')console.log(`Acceso en red: ${protocol}://${config.lanHost}:${listenPort}`);
+      if(!hasCertificate)console.log('Ejecute npm run cert:generate para HTTPS/GPS');
+    });
+    if(config.nodeEnv==='production'&&hasCertificate&&config.httpPort!==config.port){
+      http.createServer(app).listen(config.httpPort,'127.0.0.1',()=>console.log(`Proxy local: http://127.0.0.1:${config.httpPort}`));
+    }
+  };
+  start().catch(error=>{console.error('No se pudo iniciar:',error);process.exit(1);});
 }
 

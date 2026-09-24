@@ -10,3 +10,4 @@ coverage/
 .vite/
 Servidor.txt
 *.tsbuildinfo
+database/backups/*

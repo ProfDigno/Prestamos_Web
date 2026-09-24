@@ -4,7 +4,6 @@ Sistema web para administrar clientes, préstamos, ventas financiadas, cuotas, c
 
 ## Acceso actual
 
-- Aplicación local recomendada si el navegador aún no confía en el certificado: `http://localhost:3000`
 - Aplicación local HTTPS (necesaria para GPS): `https://localhost:3443`
 - Aplicación en la red: `https://192.168.0.2:3443`
 
@@ -23,7 +22,9 @@ Para generar formularios públicos de clientes, configure `APP_ORIGIN` con la UR
 6. Ejecute `npm run db:seed` únicamente en una base nueva para crear la configuración inicial.
 7. Ejecute `npm run build` y luego `npm start`.
 
-Para desarrollo use `npm run dev`. El frontend se abre en el puerto 5173 y dirige `/api` al servidor HTTPS.
+Para actualizar una instalación existente a la versión 1.1.0, siga [la guía de migraciones](database/ACTUALIZACION_1.1.0.md). No ejecute `db:seed` sobre una base con datos.
+
+Para desarrollo use `npm run dev`. La pantalla y la API comparten `https://localhost:3443` y los cambios de interfaz se actualizan automáticamente. Si todavía no se generó el certificado, se usa `http://localhost:3443` en ese mismo puerto.
 
 ## HTTPS y ubicación GPS
 
@@ -36,7 +37,7 @@ El comando de certificados crea `storage/certs/local-ca.crt`. Para evitar advert
 
 ## Comandos
 
-- `npm run dev`: API y frontend en modo desarrollo.
+- `npm run dev`: API y frontend en modo desarrollo, en un solo puerto.
 - `npm run build`: compila frontend y backend.
 - `npm start`: inicia la aplicación compilada.
 - `npm run db:seed`: crea la configuración inicial en una base nueva; no borra ni modifica una instalación existente.
