@@ -3,6 +3,15 @@ import { DateTime } from 'luxon';
 
 export type Frecuencia = 'DIARIA' | 'SEMANAL' | 'QUINCENAL' | 'MENSUAL';
 
+export function parseDisplayDate(value: string): string {
+  const match = String(value).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) throw new Error('La fecha debe tener formato dd/mm/yyyy');
+  const [, day, month, year] = match;
+  const date = DateTime.fromObject({ year: Number(year), month: Number(month), day: Number(day) });
+  if (!date.isValid || date.toFormat('dd/MM/yyyy') !== `${day}/${month}/${year}`) throw new Error('La fecha de inicio no es válida');
+  return date.toISODate() as string;
+}
+
 export interface PlanInput {
   fechaInicio: string;
   cantidadCuotas: number;

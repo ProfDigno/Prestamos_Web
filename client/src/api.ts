@@ -1,3 +1,5 @@
+import { isoDateToDisplay } from './dateUtils';
+
 const fieldNames:Record<string,string>={nombre_completo:'Nombre completo',cedula:'Cédula',fecha_nacimiento:'Fecha de nacimiento',direccion:'Dirección',telefono1:'Teléfono 1',telefono2:'Teléfono 2',email:'Email',ruc:'RUC',profesion:'Profesión',dedicacion:'Dedicación',ingreso_promedio:'Ingreso promedio',tasa_interes_sugerida:'Interés sugerido',referencias:'Referencia',fk_idtipo_referencia:'Tipo de referencia'};
 const readableField=(field:string)=>fieldNames[field]??field.replace(/_/g,' ');
 export async function api<T=any>(url:string,options:RequestInit={}):Promise<T>{
@@ -8,4 +10,4 @@ export async function api<T=any>(url:string,options:RequestInit={}):Promise<T>{
 }
 
 export const money=(value:string|number|null|undefined)=>new Intl.NumberFormat('es-PY',{style:'currency',currency:'PYG',maximumFractionDigits:0}).format(Number(value??0));
-export const shortDate=(value:string|null|undefined)=>value?new Intl.DateTimeFormat('es-PY').format(new Date(`${value.slice(0,10)}T12:00:00`)):'—';
+export const shortDate=(value:string|null|undefined)=>value?isoDateToDisplay(value)||'—':'—';

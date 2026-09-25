@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { pool, transaction, type DbClient } from './db.js';
 import { requireAuth, requirePermission, signSession } from './auth.js';
-import { allocatePayment, calculateBrokerCommission, calculateFlatLoan, calculateFlatLoanFromInterestAmount, generateDueDates, type Frecuencia } from './finance.js';
+import { allocatePayment, calculateBrokerCommission, calculateFlatLoan, calculateFlatLoanFromInterestAmount, generateDueDates, parseDisplayDate, type Frecuencia } from './finance.js';
 import { analyticsPercentage, resolveAnalyticsRange } from './analytics.js';
 
 const app = express();
@@ -579,6 +579,52 @@ async function createOperation(req:Request,res:Response,type:'PRESTAMO'|'VENTA_F
 }
 app.post('/api/operaciones/prestamos',requirePermission('PRESTAMO_CREAR'),asyncRoute((req,res)=>createOperation(req,res,'PRESTAMO')));
 app.post('/api/operaciones/ventas',requirePermission('VENTA_CREAR'),asyncRoute((req,res)=>createOperation(req,res,'VENTA_FINANCIADA')));
+
+app.patch('/api/operaciones/:id/fecha-inicio', asyncRoute(async (req, res) => {
+  const displayDate = z.object({ fecha_inicio: z.string() }).parse(req.body).fecha_inicio;
+  const fechaInicio = parseDisplayDate(displayDate);
+  const result = await transaction(async db => {
+    const operation = (await db.query(`SELECT o.idoperacion_financiera,o.tipo,o.fecha_inicio,o.cantidad_cuotas,pp.frecuencia,
+        p.idprestamo
+      FROM operacion_financiera o
+      JOIN plan_pago pp ON pp.fk_idoperacion_financiera=o.idoperacion_financiera
+      LEFT JOIN prestamo p ON p.fk_idoperacion_financiera=o.idoperacion_financiera
+      WHERE o.idoperacion_financiera=$1 AND o.activo FOR UPDATE OF o`, [req.params.id])).rows[0];
+    if (!operation) return { status: 404, body: { error: 'Operación no encontrada' } };
+    const canEdit = operation.tipo === 'PRESTAMO'
+      ? req.user?.rol === 'Administrador' || req.user?.permisos.includes('PRESTAMO_CREAR')
+      : req.user?.rol === 'Administrador' || req.user?.permisos.includes('VENTA_CREAR');
+    if (!canEdit) return { status: 403, body: { error: 'No tiene permiso para editar esta operación' } };
+
+    const installments = (await db.query(`SELECT q.idcuota,q.numero,q.estado,
+        COALESCE(pa.interes_pagado,0) AS interes_pagado,COALESCE(pa.capital_pagado,0) AS capital_pagado
+      FROM cuota q LEFT JOIN (
+        SELECT pa.fk_idcuota,SUM(pa.monto_interes) AS interes_pagado,SUM(pa.monto_capital) AS capital_pagado
+        FROM pago_aplicacion pa JOIN pago p ON p.idpago=pa.fk_idpago
+        WHERE pa.activo AND p.activo AND p.estado='CONFIRMADO' GROUP BY pa.fk_idcuota
+      ) pa ON pa.fk_idcuota=q.idcuota
+      WHERE q.fk_idoperacion_financiera=$1 AND q.activo ORDER BY q.numero FOR UPDATE OF q`, [req.params.id])).rows;
+    const dates = generateDueDates({
+      fechaInicio,
+      cantidadCuotas: Number(operation.cantidad_cuotas),
+      frecuencia: operation.frecuencia as Frecuencia,
+      diasSemana: (await db.query('SELECT dia_semana FROM plan_pago_dia_semana WHERE fk_idplan_pago=(SELECT idplan_pago FROM plan_pago WHERE fk_idoperacion_financiera=$1)', [req.params.id])).rows.map(row => Number(row.dia_semana)),
+      diasMes: (await db.query('SELECT dia_mes FROM plan_pago_dia_mes WHERE fk_idplan_pago=(SELECT idplan_pago FROM plan_pago WHERE fk_idoperacion_financiera=$1)', [req.params.id])).rows.map(row => Number(row.dia_mes)),
+    });
+    await db.query('UPDATE operacion_financiera SET fecha_inicio=$1 WHERE idoperacion_financiera=$2', [fechaInicio, req.params.id]);
+    if (operation.idprestamo) await db.query('UPDATE prestamo SET fecha_desembolso=$1 WHERE idprestamo=$2', [fechaInicio, operation.idprestamo]);
+    let updated = 0;
+    for (const installment of installments) {
+      const paid = new Decimal(installment.interes_pagado).plus(installment.capital_pagado).gt(0);
+      if (!paid && ['PENDIENTE', 'VENCIDA'].includes(installment.estado)) {
+        await db.query('UPDATE cuota SET fecha_vencimiento=$1,estado=CASE WHEN $1::date < CURRENT_DATE THEN \'VENCIDA\' ELSE \'PENDIENTE\' END WHERE idcuota=$2', [dates[Number(installment.numero) - 1], installment.idcuota]);
+        updated++;
+      }
+    }
+    return { status: 200, body: { fecha_inicio: fechaInicio, cuotas_reajustadas: updated } };
+  });
+  res.status(result.status).json(result.body);
+}));
 
 app.post('/api/operaciones/:id/pagos',requirePermission('PAGO_CREAR'),asyncRoute(async(req,res)=>{
   const data=z.object({monto:z.union([z.string(),z.number()]).optional(),cuota_ids:z.array(z.number().int().positive()).optional(),modo:z.enum(['TOTAL','INTERES']).default('TOTAL'),descuento_general:z.union([z.string(),z.number()]).optional(),fk_idforma_pago:z.number().int(),referencia:z.string().optional(),observacion:z.string().optional()}).parse(req.body);

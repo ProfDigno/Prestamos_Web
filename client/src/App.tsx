@@ -53,6 +53,7 @@ import { optimizeCedulaImage } from "./imageUtils";
 import { api, money, shortDate } from "./api";
 import { openWhatsApp } from "./whatsapp";
 import { calculatePreviewInstallments } from "./loanPreview";
+import { displayDateToIso, isoDateToDisplay, todayDisplayDate } from "./dateUtils";
 import EditClient from "./EditClient";
 import OperationDetailSelectable from "./OperationDetailSelectable";
 import { version as appVersion } from "../package.json";
@@ -927,6 +928,9 @@ function OperationDetail() {
   const [amount, setAmount] = useState("");
   const [form, setForm] = useState("");
   const [notice, setNotice] = useState<Notice>(null);
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateValue, setDateValue] = useState("");
+  const [savingDate, setSavingDate] = useState(false);
   const load = () => api(`/api/operaciones/${id}`).then(setData);
   useEffect(() => {
     load();
@@ -947,6 +951,28 @@ function OperationDetail() {
       window.open(`/api/pagos/${r.idpago}/comprobante.pdf`, "_blank");
     } catch (e) {
       setNotice({ type: "error", text: (e as Error).message });
+    }
+  }
+  function openDateEditor() {
+    setDateValue(isoDateToDisplay(data?.fecha_inicio) || "");
+    setEditingDate(true);
+    setNotice(null);
+  }
+  async function saveDate() {
+    if (!displayDateToIso(dateValue)) {
+      setNotice({ type: "error", text: "Ingrese una fecha válida con formato dd/mm/yyyy." });
+      return;
+    }
+    setSavingDate(true);
+    try {
+      const result = await api<any>(`/api/operaciones/${id}/fecha-inicio`, { method: "PATCH", body: JSON.stringify({ fecha_inicio: dateValue }) });
+      setEditingDate(false);
+      setNotice({ type: "ok", text: `Fecha actualizada. ${result.cuotas_reajustadas} cuota(s) reajustada(s).` });
+      await load();
+    } catch (e) {
+      setNotice({ type: "error", text: (e as Error).message });
+    } finally {
+      setSavingDate(false);
     }
   }
   if (!data)
@@ -1040,7 +1066,7 @@ function OperationDetail() {
             <dt>Cédula</dt>
             <dd>{data.cedula}</dd>
             <dt>Fecha de inicio</dt>
-            <dd>{shortDate(data.fecha_inicio)}</dd>
+            <dd className="editable-date-value"><span>{shortDate(data.fecha_inicio)}</span><button className="button tiny secondary" type="button" onClick={openDateEditor}>Editar fecha</button></dd>
             <dt>Tasa de interés</dt>
             <dd>{data.porcentaje_interes}%</dd>
             <dt>Corredor</dt>
@@ -1064,6 +1090,7 @@ function OperationDetail() {
           ))}
         </aside>
       </div>
+      {editingDate && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-operation-date-title"><div className="confirm-modal product-modal stack"><p className="eyebrow">EDITAR OPERACIÓN</p><h2 id="edit-operation-date-title">Fecha de inicio</h2><p className="field-help">Las cuotas pagadas o parciales conservan su fecha. Solo se reajustan las cuotas pendientes.</p><label>Fecha de inicio<input autoFocus required inputMode="numeric" placeholder="dd/mm/yyyy" maxLength={10} value={dateValue} onChange={(event) => setDateValue(event.target.value.replace(/[^0-9/]/g, "").slice(0, 10))} /></label><div className="modal-actions"><button type="button" className="button secondary" onClick={() => setEditingDate(false)} disabled={savingDate}>Cancelar</button><button type="button" className="button primary" onClick={saveDate} disabled={savingDate}>{savingDate ? "Guardando…" : "Guardar fecha"}</button></div></div></div>}
     </Page>
   );
 }
@@ -1551,7 +1578,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   const [data, setData] = useState<any>({
     fk_idcliente: "",
     fk_idcorredor: "",
-    fecha_inicio: new Date().toISOString().slice(0, 10),
+    fecha_inicio: todayDisplayDate(),
     monto_capital: "",
     porcentaje_interes: "10",
     monto_interes: "",
@@ -1671,8 +1698,11 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     });
   }
   function buildOperationBody() {
+    const fechaInicio = displayDateToIso(data.fecha_inicio);
+    if (!fechaInicio) throw new Error("Ingrese una fecha válida con formato dd/mm/yyyy");
     return {
       ...data,
+      fecha_inicio: fechaInicio,
       modo_interes: interestMode,
       monto_interes_objetivo: interestMode === "MONTO" ? data.monto_interes : undefined,
       fk_idcliente: Number(data.fk_idcliente),
@@ -1717,7 +1747,12 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
       return;
     }
     setError("");
-    setPendingOperation(buildOperationBody());
+    try {
+      setPendingOperation(buildOperationBody());
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
     setConfirmationOpen(true);
   }
   async function confirmCreate() {
@@ -1823,11 +1858,12 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
           <label>
             Fecha de inicio
             <input
-              type="date"
+              required
+              inputMode="numeric"
+              placeholder="dd/mm/yyyy"
+              maxLength={10}
               value={data.fecha_inicio}
-              onChange={(e) =>
-                setData({ ...data, fecha_inicio: e.target.value })
-              }
+              onChange={(e) => setData({ ...data, fecha_inicio: e.target.value.replace(/[^0-9/]/g, "").slice(0, 10) })}
             />
           </label>
           <label>

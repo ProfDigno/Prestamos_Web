@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FileText, MessageCircle } from "lucide-react";
 import { api, money, shortDate } from "./api";
+import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import { openWhatsApp } from "./whatsapp";
 
 export default function OperationDetailSelectable() {
@@ -11,12 +12,44 @@ export default function OperationDetailSelectable() {
   const [amount, setAmount] = useState("");
   const [form, setForm] = useState("");
   const [error, setError] = useState("");
+  const [dateNotice, setDateNotice] = useState("");
+  const [dateError, setDateError] = useState("");
+  const [dateEditorOpen, setDateEditorOpen] = useState(false);
+  const [dateValue, setDateValue] = useState("");
+  const [savingDate, setSavingDate] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"CUOTAS" | "PAGOS">("CUOTAS");
   const [expandedPayment, setExpandedPayment] = useState<number | null>(null);
   const load = () => api<any>(`/api/operaciones/${id}`).then(setData);
+  function openDateEditor() {
+    setDateValue(isoDateToDisplay(data.fecha_inicio));
+    setDateError("");
+    setDateEditorOpen(true);
+  }
+  async function saveStartDate() {
+    if (!displayDateToIso(dateValue)) {
+      setDateError("Ingrese una fecha válida con formato dd/mm/yyyy.");
+      return;
+    }
+    if (savingDate) return;
+    setSavingDate(true);
+    setDateError("");
+    try {
+      const result = await api<{ cuotas_reajustadas: number }>(`/api/operaciones/${id}/fecha-inicio`, {
+        method: "PATCH",
+        body: JSON.stringify({ fecha_inicio: dateValue }),
+      });
+      await load();
+      setDateEditorOpen(false);
+      setDateNotice(`Fecha actualizada. ${result.cuotas_reajustadas} cuota(s) reajustada(s).`);
+    } catch (e) {
+      setDateError((e as Error).message);
+    } finally {
+      setSavingDate(false);
+    }
+  }
   useEffect(() => {
     load();
     api<any[]>("/api/formas-pago").then((r) => {
@@ -249,13 +282,14 @@ export default function OperationDetailSelectable() {
         </section>
         <aside className="panel data-panel">
           <p className="eyebrow">DATOS</p>
+          {dateNotice && <div className="alert success" role="status">{dateNotice}</div>}
           <dl>
             <dt>Cliente</dt>
             <dd>{data.nombre_completo}</dd>
             <dt>Cédula</dt>
             <dd>{data.cedula}</dd>
             <dt>Fecha de inicio</dt>
-            <dd>{shortDate(data.fecha_inicio)}</dd>
+            <dd className="operation-start-date"><span>{shortDate(data.fecha_inicio)}</span><button type="button" className="button tiny secondary" onClick={openDateEditor}>Editar fecha</button></dd>
             <dt>Tasa de interés</dt>
             <dd>{data.porcentaje_interes}%</dd>
             <dt>Estado</dt>
@@ -307,6 +341,23 @@ export default function OperationDetailSelectable() {
           </div>
         </aside>
       </div>
+      {dateEditorOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-start-date-title">
+          <div className="confirm-modal">
+            <p className="eyebrow">EDITAR OPERACIÓN</p>
+            <h2 id="edit-start-date-title">Fecha de inicio</h2>
+            <p>Las cuotas pagadas o con abonos conservan su vencimiento. Se reajustarán las demás cuotas según el plan.</p>
+            <label>Fecha de inicio
+              <input autoFocus required inputMode="numeric" placeholder="dd/mm/yyyy" maxLength={10} value={dateValue} onChange={(event) => setDateValue(event.target.value.replace(/[^0-9/]/g, "").slice(0, 10))} />
+            </label>
+            {dateError && <div className="alert error" role="alert">{dateError}</div>}
+            <div className="modal-actions">
+              <button type="button" className="button secondary" disabled={savingDate} onClick={() => setDateEditorOpen(false)}>Cancelar</button>
+              <button type="button" className="button primary" disabled={savingDate} onClick={saveStartDate}>{savingDate ? "Guardando…" : "Guardar y reajustar"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {receipt && (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
           <div className="confirm-modal">

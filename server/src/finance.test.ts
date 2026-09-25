@@ -1,7 +1,12 @@
 import { describe,expect,it } from 'vitest';
-import { allocatePayment,calculateBrokerCommission,calculateFlatLoan,calculateFlatLoanFromInterestAmount,generateDueDates } from './finance.js';
+import { allocatePayment,calculateBrokerCommission,calculateFlatLoan,calculateFlatLoanFromInterestAmount,generateDueDates,parseDisplayDate } from './finance.js';
 
 describe('finanzas',()=>{
+  it('convierte fechas visibles y rechaza fechas imposibles',()=>{
+    expect(parseDisplayDate('25/09/2026')).toBe('2026-09-25');
+    expect(() => parseDisplayDate('31/02/2026')).toThrow();
+    expect(() => parseDisplayDate('2026-09-25')).toThrow();
+  });
   it('calcula interés plano y ajusta la última cuota',()=>{const r=calculateFlatLoan('1000','10',3);expect(r.interest).toBe('100.00');expect(r.total).toBe('1100.00');expect(r.cuotas.reduce((s,q)=>s+Number(q.montoTotal),0)).toBe(1100);});
   it('acepta porcentajes decimales',()=>{const r=calculateFlatLoan('1000000','12.5',3);expect(r.percentage).toBe('12.50000000');expect(r.interest).toBe('125000.00');expect(r.total).toBe('1125000.00');});
   it('calcula el porcentaje desde un monto de interés',()=>{const r=calculateFlatLoanFromInterestAmount('1000000','125000',3);expect(r.percentage).toBe('12.50000000');expect(r.interest).toBe('125000.00');});
