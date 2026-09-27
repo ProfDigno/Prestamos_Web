@@ -541,6 +541,7 @@ function Operations({
   const [rows, setRows] = useState<any[]>([]);
   const [filter, setFilter] = useState("ACTIVA");
   const [clientSearch, setClientSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   useEffect(() => {
     api<any[]>(`/api/operaciones?tipo=${type}&estado=${filter}&cliente=${encodeURIComponent(clientSearch.trim())}`).then(setRows);
   }, [type, filter, clientSearch]);
@@ -565,20 +566,92 @@ function Operations({
             <option>PAGADA</option>
             <option>CANCELADA</option>
           </select>
+          <div className="view-switch" role="group" aria-label="Vista de operaciones">
+            <button
+              type="button"
+              className={`button secondary ${viewMode === "cards" ? "active" : ""}`}
+              aria-pressed={viewMode === "cards"}
+              onClick={() => setViewMode("cards")}
+            >
+              Tarjetas
+            </button>
+            <button
+              type="button"
+              className={`button secondary ${viewMode === "table" ? "active" : ""}`}
+              aria-pressed={viewMode === "table"}
+              onClick={() => setViewMode("table")}
+            >
+              Tabla
+            </button>
+          </div>
         </div>
       }
     >
-      <section className="loan-grid">
-        {rows.map((row) => (
-          <LoanCard key={row.idoperacion_financiera} row={row} />
-        ))}
-      </section>
+      {viewMode === "cards" ? (
+        <section className="loan-grid">
+          {rows.map((row) => (
+            <LoanCard key={row.idoperacion_financiera} row={row} />
+          ))}
+        </section>
+      ) : rows.length ? <LoanTable rows={rows} /> : null}
       {!rows.length && (
         <div className="panel empty">No hay operaciones para mostrar.</div>
       )}
     </Page>
   );
 }
+
+function LoanTable({ rows }: { rows: any[] }) {
+  return (
+    <section className="panel operations-table-panel">
+      <div className="operations-table-scroll">
+        <table className="operations-table">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Estado</th>
+              <th>Frecuencia</th>
+              <th>Próximo vencimiento</th>
+              <th>Prestado</th>
+              <th>Total</th>
+              <th>Cobrado</th>
+              <th>Restante</th>
+              <th>Interés</th>
+              <th>Forma de pago</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const paymentMethod = row.tipo === "VENTA_FINANCIADA"
+                ? row.venta_forma_pago || "Efectivo"
+                : row.prestamo_forma_pago || "—";
+              const overdue = row.proximo_vencimiento && row.proximo_vencimiento < new Date().toISOString().slice(0, 10);
+              const status = row.estado === "PAGADA" ? "PAGADO" : overdue ? "ATRASADO" : "AL DÍA";
+              const statusClass = row.estado === "PAGADA" ? "paid" : overdue ? "late" : "current";
+              return (
+                <tr key={row.idoperacion_financiera}>
+                  <td><strong>{row.nombre_completo}</strong></td>
+                  <td><span className={`operation-status ${statusClass}`}>{status}</span></td>
+                  <td>{row.frecuencia}</td>
+                  <td>{shortDate(row.proximo_vencimiento)}</td>
+                  <td>{money(row.monto_capital)}</td>
+                  <td>{money(row.monto_total)}</td>
+                  <td className="green-text">{money(row.total_pagado)}</td>
+                  <td className="pending-amount">{money(row.saldo)}</td>
+                  <td>{money(row.monto_interes)} / {row.porcentaje_interes}%</td>
+                  <td>{paymentMethod}</td>
+                  <td><NavLink className="button primary tiny" to={`/operaciones/${row.idoperacion_financiera}`}>Ver cronograma</NavLink></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function LoanCard({ row }: { row: any }) {
   const paymentMethod = row.tipo === "VENTA_FINANCIADA"
     ? row.venta_forma_pago || "Efectivo"
