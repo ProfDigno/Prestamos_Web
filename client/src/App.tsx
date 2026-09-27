@@ -53,7 +53,8 @@ import { optimizeCedulaImage } from "./imageUtils";
 import { api, money, shortDate } from "./api";
 import { openWhatsApp } from "./whatsapp";
 import { calculatePreviewInstallments } from "./loanPreview";
-import { displayDateToIso, isoDateToDisplay, todayDisplayDate } from "./dateUtils";
+import { formatIntegerAmount, formatIntegerAmountInput } from "./amountInput";
+import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import EditClient from "./EditClient";
 import OperationDetailSelectable from "./OperationDetailSelectable";
 import { version as appVersion } from "../package.json";
@@ -89,7 +90,8 @@ function normalizeDecimalInput(value: string, maxDecimals = 4) {
 }
 
 function roundedAmount(value: number) {
-  return Number.isFinite(value) ? (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2) : "";
+  // Los campos de importes de nuevas operaciones trabajan con guaraníes enteros.
+  return Number.isFinite(value) ? String(Math.round(value + Number.EPSILON)) : "";
 }
 
 function roundedPercentage(value: number) {
@@ -1574,11 +1576,13 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   const [creating, setCreating] = useState(false);
   const [pendingOperation, setPendingOperation] = useState<any | null>(null);
   const createLock = useRef(false);
+  const capitalInputRef = useRef<HTMLInputElement>(null);
+  const interestAmountInputRef = useRef<HTMLInputElement>(null);
   const [interestMode, setInterestMode] = useState<"PORCENTAJE" | "MONTO">("PORCENTAJE");
   const [data, setData] = useState<any>({
     fk_idcliente: "",
     fk_idcorredor: "",
-    fecha_inicio: todayDisplayDate(),
+    fecha_inicio: localDateInput(),
     monto_capital: "",
     porcentaje_interes: "10",
     monto_interes: "",
@@ -1644,6 +1648,14 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
       };
     });
   }
+
+  function updateCapitalFromInput(input: HTMLInputElement) {
+    const formatted = formatIntegerAmountInput(input.value, input.selectionStart);
+    updateCapital(formatted.value.replace(/\D/g, ""));
+    requestAnimationFrame(() => {
+      if (capitalInputRef.current === input) capitalInputRef.current.setSelectionRange(formatted.caret, formatted.caret);
+    });
+  }
   function updatePercentage(value: string) {
     const normalized = normalizeDecimalInput(value);
     setInterestMode("PORCENTAJE");
@@ -1665,6 +1677,14 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         ? roundedPercentage(Number(normalized) / Number(d.monto_capital) * 100)
         : "",
     }));
+  }
+
+  function updateInterestAmountFromInput(input: HTMLInputElement) {
+    const formatted = formatIntegerAmountInput(input.value, input.selectionStart);
+    updateInterestAmount(formatted.value.replace(/\D/g, ""));
+    requestAnimationFrame(() => {
+      if (interestAmountInputRef.current === input) interestAmountInputRef.current.setSelectionRange(formatted.caret, formatted.caret);
+    });
   }
   function toggleWeekday(day: number) {
     setData((d: any) => {
@@ -1698,8 +1718,8 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     });
   }
   function buildOperationBody() {
-    const fechaInicio = displayDateToIso(data.fecha_inicio);
-    if (!fechaInicio) throw new Error("Ingrese una fecha válida con formato dd/mm/yyyy");
+    const fechaInicio = data.fecha_inicio;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaInicio)) throw new Error("Seleccione una fecha de inicio válida");
     return {
       ...data,
       fecha_inicio: fechaInicio,
@@ -1859,20 +1879,19 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             Fecha de inicio
             <input
               required
-              inputMode="numeric"
-              placeholder="dd/mm/yyyy"
-              maxLength={10}
+              type="date"
               value={data.fecha_inicio}
-              onChange={(e) => setData({ ...data, fecha_inicio: e.target.value.replace(/[^0-9/]/g, "").slice(0, 10) })}
+              onChange={(e) => setData({ ...data, fecha_inicio: e.target.value })}
             />
           </label>
           <label>
             Monto
             <input
               required
-              inputMode="decimal"
-              value={data.monto_capital}
-              onChange={(e) => updateCapital(e.target.value.replace(/\D/g, ""))}
+              ref={capitalInputRef}
+              inputMode="numeric"
+              value={formatIntegerAmount(data.monto_capital)}
+              onChange={(e) => updateCapitalFromInput(e.currentTarget)}
             />
           </label>
           <label>
@@ -1890,10 +1909,11 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             Interés a cobrar
             <input
               required
+              ref={interestAmountInputRef}
               type="text"
-              inputMode="decimal"
-              value={data.monto_interes}
-              onChange={(e) => updateInterestAmount(e.target.value)}
+              inputMode="numeric"
+              value={formatIntegerAmount(data.monto_interes)}
+              onChange={(e) => updateInterestAmountFromInput(e.currentTarget)}
             />
             <small className="field-help">Podés ingresar el monto o el porcentaje; se calcula el otro valor.</small>
           </label>
@@ -2472,6 +2492,7 @@ function Expenses() {
   const [saving, setSaving] = useState(false);
   const [annulTarget, setAnnulTarget] = useState<any | null>(null);
   const [annulReason, setAnnulReason] = useState("");
+  const expenseAmountInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<any>({
     fk_idgasto_tipo: "",
     fk_idforma_pago: "",
@@ -2506,8 +2527,19 @@ function Expenses() {
     setModalOpen(true);
   }
   function closeModal() { setModalOpen(false); }
+  function updateExpenseAmount(input: HTMLInputElement) {
+    const formatted = formatIntegerAmountInput(input.value, input.selectionStart);
+    setForm((current: any) => ({ ...current, monto: formatted.value.replace(/\D/g, "") }));
+    requestAnimationFrame(() => {
+      if (expenseAmountInputRef.current === input) expenseAmountInputRef.current.setSelectionRange(formatted.caret, formatted.caret);
+    });
+  }
   async function add(e: FormEvent) {
     e.preventDefault();
+    if (!form.monto || Number(form.monto) <= 0) {
+      setNotice({ type: "error", text: "Ingrese un monto válido para el gasto." });
+      return;
+    }
     setSaving(true);
     try {
       await api("/api/gastos", {
@@ -2562,7 +2594,7 @@ function Expenses() {
           {!rows.length && <div className="empty">No hay gastos registrados.</div>}
         </div>
       </section>
-      {modalOpen && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expense-modal-title"><form className="confirm-modal product-modal stack" onSubmit={add}><p className="eyebrow">REGISTRO DE GASTOS</p><h2 id="expense-modal-title">Nuevo gasto</h2><label>Tipo<select required value={form.fk_idgasto_tipo} onChange={(e) => setForm({ ...form, fk_idgasto_tipo: e.target.value })}>{types.map((t) => <option key={t.idgasto_tipo} value={t.idgasto_tipo}>{t.nombre}</option>)}</select></label><label>Forma de pago<select required value={form.fk_idforma_pago} onChange={(e) => setForm({ ...form, fk_idforma_pago: e.target.value })}><option value="">Seleccione una forma de pago</option>{paymentMethods.map((method) => <option key={method.idforma_pago} value={method.idforma_pago}>{method.nombre}</option>)}</select></label><label>Fecha<input required type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></label><label>Concepto<input required value={form.concepto} onChange={(e) => setForm({ ...form, concepto: e.target.value })} /></label><label>Monto<input required min="0.01" step="0.01" inputMode="decimal" value={form.monto} onChange={(e) => setForm({ ...form, monto: e.target.value })} /></label><label>Observación<textarea value={form.observacion} onChange={(e) => setForm({ ...form, observacion: e.target.value })} /></label><div className="modal-actions"><button type="button" className="button secondary" onClick={closeModal} disabled={saving}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? "Guardando…" : "Registrar egreso"}</button></div></form></div>}
+      {modalOpen && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="expense-modal-title"><form className="confirm-modal product-modal stack" onSubmit={add}><p className="eyebrow">REGISTRO DE GASTOS</p><h2 id="expense-modal-title">Nuevo gasto</h2><label>Tipo<select required value={form.fk_idgasto_tipo} onChange={(e) => setForm({ ...form, fk_idgasto_tipo: e.target.value })}>{types.map((t) => <option key={t.idgasto_tipo} value={t.idgasto_tipo}>{t.nombre}</option>)}</select></label><label>Forma de pago<select required value={form.fk_idforma_pago} onChange={(e) => setForm({ ...form, fk_idforma_pago: e.target.value })}><option value="">Seleccione una forma de pago</option>{paymentMethods.map((method) => <option key={method.idforma_pago} value={method.idforma_pago}>{method.nombre}</option>)}</select></label><label>Fecha<input required type="date" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} /></label><label>Concepto<input required value={form.concepto} onChange={(e) => setForm({ ...form, concepto: e.target.value })} /></label><label>Monto<input required ref={expenseAmountInputRef} inputMode="numeric" value={formatIntegerAmount(form.monto)} onChange={(e) => updateExpenseAmount(e.currentTarget)} /></label><label>Observación<textarea value={form.observacion} onChange={(e) => setForm({ ...form, observacion: e.target.value })} /></label><div className="modal-actions"><button type="button" className="button secondary" onClick={closeModal} disabled={saving}>Cancelar</button><button className="button primary" disabled={saving}>{saving ? "Guardando…" : "Registrar egreso"}</button></div></form></div>}
       {annulTarget && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="annul-expense-title"><form className="confirm-modal product-modal stack" onSubmit={(e) => { e.preventDefault(); annul(); }}><p className="eyebrow">ANULACIÓN DE GASTO</p><h2 id="annul-expense-title">¿Está seguro de anular este gasto?</h2><p className="muted">El gasto y su movimiento de caja pasarán a monto cero, conservando el historial.</p><label>Motivo de anulación<textarea required autoFocus value={annulReason} onChange={(e) => setAnnulReason(e.target.value)} /></label><div className="modal-actions"><button type="button" className="button secondary" onClick={() => { setAnnulTarget(null); setAnnulReason(""); }} disabled={saving}>Cancelar</button><button className="button primary" disabled={saving || !annulReason.trim()}>{saving ? "Anulando…" : "Aceptar"}</button></div></form></div>}
     </Page>
   );

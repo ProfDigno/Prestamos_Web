@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FileText, MessageCircle } from "lucide-react";
 import { api, money, shortDate } from "./api";
 import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import { openWhatsApp } from "./whatsapp";
+import { formatIntegerAmount, formatIntegerAmountInput } from "./amountInput";
 
 export default function OperationDetailSelectable() {
   const { id } = useParams();
@@ -22,6 +23,7 @@ export default function OperationDetailSelectable() {
   const [receipt, setReceipt] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"CUOTAS" | "PAGOS">("CUOTAS");
   const [expandedPayment, setExpandedPayment] = useState<number | null>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
   const load = () => api<any>(`/api/operaciones/${id}`).then(setData);
   function openDateEditor() {
     setDateValue(isoDateToDisplay(data.fecha_inicio));
@@ -125,6 +127,13 @@ export default function OperationDetailSelectable() {
     setError("");
     setConfirmOpen(true);
   }
+  function updateAmountFromInput(input: HTMLInputElement) {
+    const formatted = formatIntegerAmountInput(input.value, input.selectionStart);
+    setAmount(formatted.value.replace(/\D/g, ""));
+    requestAnimationFrame(() => {
+      if (amountInputRef.current === input) amountInputRef.current.setSelectionRange(formatted.caret, formatted.caret);
+    });
+  }
   function openReceipt(destination: "PDF" | "WHATSAPP") {
     if (!receipt) return;
     const amount = money(receipt.monto);
@@ -220,9 +229,10 @@ export default function OperationDetailSelectable() {
                   <input
                     aria-label="Monto a cobrar"
                     placeholder="Monto a cobrar"
+                    ref={amountInputRef}
                     inputMode="numeric"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
+                    value={formatIntegerAmount(amount)}
+                    onChange={(e) => updateAmountFromInput(e.currentTarget)}
                   />
                   <select aria-label="Forma de pago" value={form} onChange={(e) => setForm(e.target.value)}>
                     {forms.map((f) => <option key={f.idforma_pago} value={f.idforma_pago}>{f.nombre}</option>)}
