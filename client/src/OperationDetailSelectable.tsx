@@ -6,6 +6,12 @@ import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import { openWhatsApp } from "./whatsapp";
 import { formatIntegerAmount, formatIntegerAmountInput } from "./amountInput";
 
+function formatInterestPercentage(value: string | number | null | undefined) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return numeric.toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
 export default function OperationDetailSelectable() {
   const { id } = useParams();
   const [data, setData] = useState<any>();
@@ -197,7 +203,7 @@ export default function OperationDetailSelectable() {
         </article>
         <article className="metric interest">
           <span>Interés</span>
-          <strong>{money(data.monto_interes)} / {data.porcentaje_interes}%</strong>
+          <strong>{money(data.monto_interes)} / {formatInterestPercentage(data.porcentaje_interes)}%</strong>
         </article>
         <article className="metric">
           <span>Total a cobrar</span>
@@ -301,7 +307,7 @@ export default function OperationDetailSelectable() {
             <dt>Fecha de inicio</dt>
             <dd className="operation-start-date"><span>{shortDate(data.fecha_inicio)}</span><button type="button" className="button tiny secondary" onClick={openDateEditor}>Editar fecha</button></dd>
             <dt>Tasa de interés</dt>
-            <dd>{data.porcentaje_interes}%</dd>
+            <dd>{formatInterestPercentage(data.porcentaje_interes)}%</dd>
             <dt>Estado</dt>
             <dd>{data.estado}</dd>
             <dt>Observación</dt>

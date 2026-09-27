@@ -89,13 +89,26 @@ function normalizeDecimalInput(value: string, maxDecimals = 4) {
   return `${integer || "0"}.${fractionParts.join("").slice(0, maxDecimals)}`;
 }
 
+function normalizeSearchText(value: string | null | undefined) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function formatInterestPercentage(value: string | number | null | undefined) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return numeric.toFixed(3).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
 function roundedAmount(value: number) {
   // Los campos de importes de nuevas operaciones trabajan con guaraníes enteros.
   return Number.isFinite(value) ? String(Math.round(value + Number.EPSILON)) : "";
 }
 
 function roundedPercentage(value: number) {
-  return Number.isFinite(value) ? (Math.round((value + Number.EPSILON) * 10000) / 10000).toString() : "";
+  return Number.isFinite(value) ? (Math.round((value + Number.EPSILON) * 1000) / 1000).toString() : "";
 }
 
 function localDateInput() {
@@ -639,7 +652,7 @@ function LoanTable({ rows }: { rows: any[] }) {
                   <td>{money(row.monto_total)}</td>
                   <td className="green-text">{money(row.total_pagado)}</td>
                   <td className="pending-amount">{money(row.saldo)}</td>
-                  <td>{money(row.monto_interes)} / {row.porcentaje_interes}%</td>
+                  <td>{money(row.monto_interes)} / {formatInterestPercentage(row.porcentaje_interes)}%</td>
                   <td>{paymentMethod}</td>
                   <td><NavLink className="button primary tiny" to={`/operaciones/${row.idoperacion_financiera}`}>Ver cronograma</NavLink></td>
                 </tr>
@@ -704,7 +717,7 @@ function LoanCard({ row }: { row: any }) {
         </div>
         <div>
           <small>INTERÉS</small>
-          <strong>{money(row.monto_interes)} / {row.porcentaje_interes}%</strong>
+          <strong>{money(row.monto_interes)} / {formatInterestPercentage(row.porcentaje_interes)}%</strong>
         </div>
       </div>
       <NavLink
@@ -1143,7 +1156,7 @@ function OperationDetail() {
             <dt>Fecha de inicio</dt>
             <dd className="editable-date-value"><span>{shortDate(data.fecha_inicio)}</span><button className="button tiny secondary" type="button" onClick={openDateEditor}>Editar fecha</button></dd>
             <dt>Tasa de interés</dt>
-            <dd>{data.porcentaje_interes}%</dd>
+            <dd>{formatInterestPercentage(data.porcentaje_interes)}%</dd>
             <dt>Corredor</dt>
             <dd>{data.corredor_nombre ? `${data.corredor_nombre} · ${data.porcentaje_comision}% · ${money(data.monto_comision)}` : "Sin corredor"}</dd>
             <dt>Estado</dt>
@@ -1644,6 +1657,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   const [products, setProducts] = useState<any[]>([]);
   const [brokers, setBrokers] = useState<any[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<any[]>([]);
+  const [clientSearch, setClientSearch] = useState("");
   const [error, setError] = useState("");
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1675,7 +1689,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
           fk_idcliente: String(r[0].idcliente),
           porcentaje_interes:
             r[0].tasa_interes_sugerida != null
-              ? String(r[0].tasa_interes_sugerida)
+              ? normalizeDecimalInput(String(r[0].tasa_interes_sugerida), 3)
               : d.porcentaje_interes,
           monto_interes:
             d.monto_capital && r[0].tasa_interes_sugerida != null
@@ -1695,6 +1709,13 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
       if (defaultMethod) setData((d: any) => ({ ...d, fk_idforma_pago: String(defaultMethod.idforma_pago) }));
     });
   }, []);
+  const visibleClients = useMemo(() => {
+    const query = normalizeSearchText(clientSearch.trim());
+    if (!query) return clients;
+    return clients.filter((client) =>
+      normalizeSearchText(`${client.nombre_completo} ${client.cedula}`).includes(query),
+    );
+  }, [clients, clientSearch]);
   const total = useMemo(() => Number(data.monto_capital || 0) + Number(data.monto_interes || 0), [data]);
   const installmentsPreview = useMemo(
     () => calculatePreviewInstallments(data.monto_capital, data.monto_interes, data.cantidad_cuotas),
@@ -1730,7 +1751,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     });
   }
   function updatePercentage(value: string) {
-    const normalized = normalizeDecimalInput(value);
+    const normalized = normalizeDecimalInput(value, 3);
     setInterestMode("PORCENTAJE");
     setData((d: any) => ({
       ...d,
@@ -1887,6 +1908,14 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         <div className="form-grid">
           <label>
             Cliente
+            <input
+              type="search"
+              className="client-search operation-client-search"
+              placeholder="Buscar por nombre o cédula..."
+              aria-label="Buscar cliente por nombre o cédula"
+              value={clientSearch}
+              onChange={(e) => setClientSearch(e.target.value)}
+            />
             <select
               required
               value={data.fk_idcliente}
@@ -1900,7 +1929,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
                   fk_idcliente: value,
                   porcentaje_interes:
                     client?.tasa_interes_sugerida != null
-                      ? String(client.tasa_interes_sugerida)
+                      ? normalizeDecimalInput(String(client.tasa_interes_sugerida), 3)
                       : data.porcentaje_interes,
                   monto_interes:
                     client?.tasa_interes_sugerida != null && data.monto_capital
@@ -1910,11 +1939,11 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
                 setInterestMode("PORCENTAJE");
               }}
             >
-              {clients.map((c) => (
+              {visibleClients.length ? visibleClients.map((c) => (
                 <option key={c.idcliente} value={c.idcliente}>
-                  {c.nombre_completo}
+                  {c.nombre_completo} · {c.cedula}
                 </option>
-              ))}
+              )) : <option value="" disabled>No hay clientes coincidentes</option>}
             </select>
           </label>
           <label>
@@ -2158,7 +2187,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
           Crear {sale ? "venta" : "préstamo"} y generar cuotas
         </button>
       </form>
-      {confirmationOpen && pendingOperation && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="operation-confirm-title"><div className="confirm-modal operation-confirm-modal"><p className="eyebrow">CONFIRMAR {sale ? "VENTA FINANCIADA" : "PRÉSTAMO"}</p><h2 id="operation-confirm-title">Revisá los datos antes de crear</h2><div className="operation-summary"><div><span>Cliente</span><strong>{summaryClient?.nombre_completo || "—"}</strong></div><div><span>Forma de pago</span><strong>{summaryPayment?.nombre || "—"}</strong></div>{sale && <div><span>Producto</span><strong>{summaryProduct?.nombre || "—"} · {pendingOperation.cantidad} unidad(es)</strong></div>}<div><span>Fecha de inicio</span><strong>{shortDate(pendingOperation.fecha_inicio)}</strong></div><div><span>Capital solicitado</span><strong>{money(pendingOperation.monto_capital)}</strong></div><div><span>Interés</span><strong>{money(pendingOperation.monto_interes)} ({pendingOperation.porcentaje_interes}%)</strong></div><div><span>Total a cobrar</span><strong>{money(Number(pendingOperation.monto_capital || 0) + Number(pendingOperation.monto_interes || 0))}</strong></div><div><span>Cuotas</span><strong>{pendingOperation.cantidad_cuotas}</strong></div><div><span>Frecuencia</span><strong>{frequencyLabel}{summaryDays ? ` · ${summaryDays}` : ""}</strong></div></div>{error && <div className="alert error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => { if (!creating) { setConfirmationOpen(false); setPendingOperation(null); setError(""); } }} disabled={creating}>Cancelar</button><button type="button" className="button primary" onClick={confirmCreate} disabled={creating}>{creating ? "Creando…" : "Aceptar y crear"}</button></div></div></div>}
+      {confirmationOpen && pendingOperation && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="operation-confirm-title"><div className="confirm-modal operation-confirm-modal"><p className="eyebrow">CONFIRMAR {sale ? "VENTA FINANCIADA" : "PRÉSTAMO"}</p><h2 id="operation-confirm-title">Revisá los datos antes de crear</h2><div className="operation-summary"><div><span>Cliente</span><strong>{summaryClient?.nombre_completo || "—"}</strong></div><div><span>Forma de pago</span><strong>{summaryPayment?.nombre || "—"}</strong></div>{sale && <div><span>Producto</span><strong>{summaryProduct?.nombre || "—"} · {pendingOperation.cantidad} unidad(es)</strong></div>}<div><span>Fecha de inicio</span><strong>{shortDate(pendingOperation.fecha_inicio)}</strong></div><div><span>Capital solicitado</span><strong>{money(pendingOperation.monto_capital)}</strong></div><div><span>Interés</span><strong>{money(pendingOperation.monto_interes)} ({formatInterestPercentage(pendingOperation.porcentaje_interes)}%)</strong></div><div><span>Total a cobrar</span><strong>{money(Number(pendingOperation.monto_capital || 0) + Number(pendingOperation.monto_interes || 0))}</strong></div><div><span>Cuotas</span><strong>{pendingOperation.cantidad_cuotas}</strong></div><div><span>Frecuencia</span><strong>{frequencyLabel}{summaryDays ? ` · ${summaryDays}` : ""}</strong></div></div>{error && <div className="alert error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => { if (!creating) { setConfirmationOpen(false); setPendingOperation(null); setError(""); } }} disabled={creating}>Cancelar</button><button type="button" className="button primary" onClick={confirmCreate} disabled={creating}>{creating ? "Creando…" : "Aceptar y crear"}</button></div></div></div>}
     </Page>
   );
 }
