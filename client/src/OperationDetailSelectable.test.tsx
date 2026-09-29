@@ -18,7 +18,7 @@ import OperationDetailSelectable from "./OperationDetailSelectable";
 afterEach(() => { cleanup(); api.mockReset(); });
 
 describe("edición de fecha en el detalle visible", () => {
-  it.each(["PRESTAMO", "VENTA_FINANCIADA"])('muestra el botón y refresca las cuotas de %s', async (tipo) => {
+  it.each(["VENTA_FINANCIADA"])('muestra el botón y refresca las cuotas de %s', async (tipo) => {
     let updated = false;
     api.mockImplementation(async (url: string, options?: RequestInit) => {
       if (url === "/api/formas-pago") return [];

@@ -46,3 +46,4 @@
 .expense-types-chart{min-height:250px}
 @media(max-width:720px){.analytics-metrics.metrics-grid.three{grid-template-columns:1fr}.expense-type-list>div{grid-template-columns:1fr}.expense-type-list strong{margin-left:0}}
 .login-version{margin:18px 0 0;color:#65859b;font-size:10px;letter-spacing:.04em}
+.loan-edit-modal{width:min(1000px,96vw);max-height:94vh;overflow-y:auto;background:#0b1d2a;border:1px solid #34536a;border-radius:12px}.loan-edit-modal .page{padding:22px}.loan-edit-modal .operation-form>.button{margin-right:8px}.loan-edit-modal>.page>.simulation{margin-bottom:16px}.loan-card>.button{margin-top:8px}@media(max-width:720px){.loan-edit-modal .page{padding:12px}.loan-edit-modal{max-height:96vh}}

@@ -116,6 +116,15 @@ export interface PaymentAllocation {
   montoTotal: string;
 }
 
+// Discounts cover remaining interest first, then capital, without becoming cash payments.
+export function withDiscountApplied<T extends PayableInstallment & {monto_descontado?: string | number}>(q:T):T {
+  const discount=new Decimal(q.monto_descontado??0);
+  const interestDue=Decimal.max(0,new Decimal(q.monto_interes).minus(q.interes_pagado));
+  const interestDiscount=Decimal.min(discount,interestDue);
+  return {...q,interes_pagado:new Decimal(q.interes_pagado).plus(interestDiscount).toFixed(2),
+    capital_pagado:new Decimal(q.capital_pagado).plus(discount.minus(interestDiscount)).toFixed(2)};
+}
+
 export function allocatePayment(
   installments: PayableInstallment[],
   value: string | number,

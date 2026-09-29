@@ -57,6 +57,7 @@ import { formatIntegerAmount, formatIntegerAmountInput } from "./amountInput";
 import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import EditClient from "./EditClient";
 import OperationDetailSelectable from "./OperationDetailSelectable";
+import { EditLoanButton, LoanEditingContext } from "./LoanEditing";
 import { version as appVersion } from "../package.json";
 
 type User = {
@@ -654,7 +655,7 @@ function LoanTable({ rows }: { rows: any[] }) {
                   <td className="pending-amount">{money(row.saldo)}</td>
                   <td>{money(row.monto_interes)} / {formatInterestPercentage(row.porcentaje_interes)}%</td>
                   <td>{paymentMethod}</td>
-                  <td><NavLink className="button primary tiny" to={`/operaciones/${row.idoperacion_financiera}`}>Ver cronograma</NavLink></td>
+                  <td><NavLink className="button primary tiny" to={`/operaciones/${row.idoperacion_financiera}`}>Ver cronograma</NavLink> <EditLoanButton operation={row} /></td>
                 </tr>
               );
             })}
@@ -726,6 +727,7 @@ function LoanCard({ row }: { row: any }) {
       >
         Ver cronograma
       </NavLink>
+      <EditLoanButton operation={row} />
     </article>
   );
 }
@@ -1651,8 +1653,10 @@ function ClientForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-function NewOperation({ sale = false }: { sale?: boolean }) {
+export function NewOperation({ sale = false, editId, onDone, onCancel }: { sale?: boolean; editId?: number; onDone?: (id:number)=>void; onCancel?:()=>void }) {
   const nav = useNavigate();
+  const [original,setOriginal]=useState<any>(null);
+  const [loading,setLoading]=useState(Boolean(editId));
   const [clients, setClients] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [brokers, setBrokers] = useState<any[]>([]);
@@ -1676,11 +1680,12 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     cantidad_cuotas: 12,
     frecuencia: "MENSUAL",
     dias_semana: [1],
-    dias_mes: [10, 25],
+    dias_mes: [10],
     fk_idproducto: "",
     fk_idforma_pago: "",
   });
   useEffect(() => {
+    if (editId) return;
     api<any[]>("/api/clientes").then((r) => {
       setClients(r);
       if (r[0])
@@ -1709,6 +1714,30 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
       if (defaultMethod) setData((d: any) => ({ ...d, fk_idforma_pago: String(defaultMethod.idforma_pago) }));
     });
   }, []);
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled=false;
+    Promise.all([
+      api<any>(`/api/operaciones/${editId}`),
+      api<any[]>("/api/clientes"),
+      api<any[]>("/api/corredores/activos"),
+      api<any[]>("/api/formas-pago"),
+    ]).then(([loan,customers,agents,methods])=>{
+      if(cancelled)return;
+      if(loan.tipo!=="PRESTAMO" || !loan.activo || !["ACTIVA","PAGADA","PENDIENTE"].includes(loan.estado))throw new Error("Este préstamo no se puede editar.");
+      setOriginal(loan);
+      setClients(customers.some(c=>c.idcliente===loan.fk_idcliente)?customers:[...customers,{idcliente:loan.fk_idcliente,nombre_completo:loan.nombre_completo,cedula:loan.cedula}]);
+      setBrokers(loan.fk_idcorredor && !agents.some(c=>c.idcorredor===loan.fk_idcorredor)?[...agents,{idcorredor:loan.fk_idcorredor,nombre_completo:loan.corredor_nombre,porcentaje_comision:loan.porcentaje_comision}]:agents);
+      setPaymentMethods(methods.some(m=>m.idforma_pago===loan.prestamo_fk_idforma_pago)?methods:[...methods,{idforma_pago:loan.prestamo_fk_idforma_pago,nombre:loan.prestamo_forma_pago}]);
+      setData((d:any)=>({...d,fk_idcliente:String(loan.fk_idcliente),fk_idcorredor:loan.fk_idcorredor?String(loan.fk_idcorredor):"",
+        fk_idforma_pago:String(loan.prestamo_fk_idforma_pago),fecha_inicio:loan.fecha_inicio.slice(0,10),
+        monto_capital:String(loan.monto_capital),porcentaje_interes:formatInterestPercentage(loan.porcentaje_interes),
+        monto_interes:String(loan.monto_interes),cantidad_cuotas:loan.cantidad_cuotas,frecuencia:loan.frecuencia,
+        dias_semana:loan.dias_semana,dias_mes:loan.dias_mes}));
+      setInterestMode("MONTO");
+    }).catch(e=>{if(!cancelled)setError(e.message);}).finally(()=>{if(!cancelled)setLoading(false);});
+    return ()=>{cancelled=true;};
+  },[editId]);
   const visibleClients = useMemo(() => {
     const query = normalizeSearchText(clientSearch.trim());
     if (!query) return clients;
@@ -1836,6 +1865,10 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
   function submit(e: FormEvent) {
     e.preventDefault();
     if (confirmationOpen || creating) return;
+    if(editId && total < Number(original.total_pagado)+Number(original.total_descontado)){
+      setError("El nuevo total no puede ser menor a lo pagado más los descuentos conservados.");
+      return;
+    }
     if (data.frecuencia === "DIARIA" && !data.dias_semana.length) {
       setError("Seleccione al menos un día de la semana para un plan diario");
       return;
@@ -1876,10 +1909,11 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
     setError("");
     try {
       const r = await api<any>(
-        `/api/operaciones/${sale ? "ventas" : "prestamos"}`,
+        editId ? `/api/operaciones/${editId}/reemplazo` : `/api/operaciones/${sale ? "ventas" : "prestamos"}`,
         { method: "POST", body: JSON.stringify(pendingOperation) },
       );
-      nav(`/operaciones/${r.idoperacion_financiera}`);
+      if(onDone)onDone(r.idoperacion_financiera);
+      else nav(`/operaciones/${r.idoperacion_financiera}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1899,11 +1933,19 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         ? (pendingOperation.dias_mes || []).join(" y ")
         : pendingOperation?.dias_mes?.[0];
   const frequencyLabel = pendingOperation?.frecuencia === "DIARIA" ? "Diaria" : pendingOperation?.frecuencia === "SEMANAL" ? "Semanal" : pendingOperation?.frecuencia === "QUINCENAL" ? "Quincenal" : "Mensual";
+  if(loading)return <div className="panel" role="status">Cargando préstamo…</div>;
+  if(editId && !original)return <div className="alert error" role="alert">{error || "Préstamo no disponible"}<button className="button secondary" onClick={onCancel}>Cerrar</button></div>;
   return (
     <Page
-      title={sale ? "Nueva venta financiada" : "Nuevo préstamo"}
+      title={editId ? `Editar préstamo #${original.idprestamo}` : sale ? "Nueva venta financiada" : "Nuevo préstamo"}
       subtitle="Configurá capital, interés y calendario"
     >
+      {editId && <><p>Al guardar se reemplazará el préstamo original y se conservarán sus pagos y descuentos.</p>
+        <div className="simulation" aria-label="Resumen de edición">
+          <div><span>Total pagado</span><strong>{money(original.total_pagado)}</strong></div>
+          <div><span>Descuentos conservados</span><strong>{money(original.total_descontado)}</strong></div>
+          <div><span>Saldo resultante</span><strong>{money(total-Number(original.total_pagado)-Number(original.total_descontado))}</strong></div>
+        </div></>}
       <form className="panel operation-form" onSubmit={submit}>
         <div className="form-grid">
           <label>
@@ -1918,6 +1960,7 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
             />
             <select
               required
+              aria-label="Cliente"
               value={data.fk_idcliente}
               onChange={(e) => {
                 const value = e.target.value;
@@ -2184,10 +2227,11 @@ function NewOperation({ sale = false }: { sale?: boolean }) {
         </section>
         {error && <div className="alert error">{error}</div>}
         <button className="button primary" disabled={confirmationOpen || creating}>
-          Crear {sale ? "venta" : "préstamo"} y generar cuotas
+          {editId ? "Guardar edición" : `Crear ${sale ? "venta" : "préstamo"} y generar cuotas`}
         </button>
+        {editId && <button type="button" className="button secondary" disabled={creating} onClick={onCancel}>Cancelar edición</button>}
       </form>
-      {confirmationOpen && pendingOperation && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="operation-confirm-title"><div className="confirm-modal operation-confirm-modal"><p className="eyebrow">CONFIRMAR {sale ? "VENTA FINANCIADA" : "PRÉSTAMO"}</p><h2 id="operation-confirm-title">Revisá los datos antes de crear</h2><div className="operation-summary"><div><span>Cliente</span><strong>{summaryClient?.nombre_completo || "—"}</strong></div><div><span>Forma de pago</span><strong>{summaryPayment?.nombre || "—"}</strong></div>{sale && <div><span>Producto</span><strong>{summaryProduct?.nombre || "—"} · {pendingOperation.cantidad} unidad(es)</strong></div>}<div><span>Fecha de inicio</span><strong>{shortDate(pendingOperation.fecha_inicio)}</strong></div><div><span>Capital solicitado</span><strong>{money(pendingOperation.monto_capital)}</strong></div><div><span>Interés</span><strong>{money(pendingOperation.monto_interes)} ({formatInterestPercentage(pendingOperation.porcentaje_interes)}%)</strong></div><div><span>Total a cobrar</span><strong>{money(Number(pendingOperation.monto_capital || 0) + Number(pendingOperation.monto_interes || 0))}</strong></div><div><span>Cuotas</span><strong>{pendingOperation.cantidad_cuotas}</strong></div><div><span>Frecuencia</span><strong>{frequencyLabel}{summaryDays ? ` · ${summaryDays}` : ""}</strong></div></div>{error && <div className="alert error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => { if (!creating) { setConfirmationOpen(false); setPendingOperation(null); setError(""); } }} disabled={creating}>Cancelar</button><button type="button" className="button primary" onClick={confirmCreate} disabled={creating}>{creating ? "Creando…" : "Aceptar y crear"}</button></div></div></div>}
+      {confirmationOpen && pendingOperation && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="operation-confirm-title"><div className="confirm-modal operation-confirm-modal"><p className="eyebrow">CONFIRMAR {sale ? "VENTA FINANCIADA" : "PRÉSTAMO"}</p><h2 id="operation-confirm-title">{editId ? "Revisá los datos antes de reemplazar" : "Revisá los datos antes de crear"}</h2><div className="operation-summary"><div><span>Cliente</span><strong>{summaryClient?.nombre_completo || "—"}</strong></div><div><span>Forma de pago</span><strong>{summaryPayment?.nombre || "—"}</strong></div>{sale && <div><span>Producto</span><strong>{summaryProduct?.nombre || "—"} · {pendingOperation.cantidad} unidad(es)</strong></div>}<div><span>Fecha de inicio</span><strong>{shortDate(pendingOperation.fecha_inicio)}</strong></div><div><span>Capital solicitado</span><strong>{money(pendingOperation.monto_capital)}</strong></div><div><span>Interés</span><strong>{money(pendingOperation.monto_interes)} ({formatInterestPercentage(pendingOperation.porcentaje_interes)}%)</strong></div><div><span>Total a cobrar</span><strong>{money(Number(pendingOperation.monto_capital || 0) + Number(pendingOperation.monto_interes || 0))}</strong></div><div><span>Cuotas</span><strong>{pendingOperation.cantidad_cuotas}</strong></div><div><span>Frecuencia</span><strong>{frequencyLabel}{summaryDays ? ` · ${summaryDays}` : ""}</strong></div></div>{error && <div className="alert error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => { if (!creating) { setConfirmationOpen(false); setPendingOperation(null); setError(""); } }} disabled={creating}>Cancelar</button><button type="button" className="button primary" onClick={confirmCreate} disabled={creating}>{creating ? "Guardando…" : editId ? "Aceptar y guardar edición" : "Aceptar y crear"}</button></div></div></div>}
     </Page>
   );
 }
@@ -3429,9 +3473,20 @@ function ClientFormComplete({ onDone, onCancel, clientId }: { onDone: () => void
 }
 export default function App() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [editingLoan,setEditingLoan]=useState<number|null>(null);
+  const [editingAvailable,setEditingAvailable]=useState(false);
   const publicMatch = location.pathname.match(/^\/carga-cliente\/([^/]+)$/);
   const isPublic = Boolean(publicMatch);
   const [user, setUser] = useState<User | null | undefined>(undefined);
+  useEffect(()=>{
+    setEditingAvailable(false);
+    if(user && (user.rol==='Administrador' || user.permisos.includes('PRESTAMO_CREAR'))){
+      let cancelled=false;
+      api<{disponible:boolean}>('/api/prestamos/edicion-disponible').then(r=>{if(!cancelled)setEditingAvailable(r.disponible);}).catch(()=>{});
+      return ()=>{cancelled=true;};
+    }
+  },[user]);
   useEffect(() => {
     if (isPublic) return;
     api<{ user: User }>("/api/auth/me")
@@ -3452,6 +3507,7 @@ export default function App() {
     );
   if (!user) return <Login onLogin={setUser} />;
   return (
+    <LoanEditingContext.Provider value={{available:editingAvailable,open:setEditingLoan}}>
     <Shell user={user} onLogout={logout}>
       <Routes>
         <Route path="/" element={<Dashboard />} />
@@ -3492,6 +3548,10 @@ export default function App() {
         <Route path="/administracion/corredores" element={<AdminBrokers />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
+      {editingLoan!==null && <div className="modal-backdrop loan-edit-backdrop" role="dialog" aria-modal="true" aria-label="Editar préstamo">
+        <div className="loan-edit-modal"><NewOperation key={editingLoan} editId={editingLoan} onCancel={()=>setEditingLoan(null)} onDone={id=>{setEditingLoan(null);navigate(`/operaciones/${id}`);}} /></div>
+      </div>}
     </Shell>
+    </LoanEditingContext.Provider>
   );
 }

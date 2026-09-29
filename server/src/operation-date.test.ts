@@ -40,13 +40,13 @@ describe('edición de fecha de operación', () => {
   });
 
   it.each([
-    ['PRESTAMO', 'DIARIA', [1, 2, 3, 4, 5], [], ['2026-09-28', '2026-09-29', '2026-09-30']],
+    ['VENTA_FINANCIADA', 'DIARIA', [1, 2, 3, 4, 5], [], ['2026-09-28', '2026-09-29', '2026-09-30']],
     ['VENTA_FINANCIADA', 'SEMANAL', [1], [], ['2026-09-28', '2026-10-05', '2026-10-12']],
-    ['PRESTAMO', 'QUINCENAL', [], [10, 25], ['2026-10-10', '2026-10-25', '2026-11-10']],
+    ['VENTA_FINANCIADA', 'QUINCENAL', [], [10, 25], ['2026-10-10', '2026-10-25', '2026-11-10']],
     ['VENTA_FINANCIADA', 'MENSUAL', [], [10], ['2026-10-10', '2026-11-10', '2026-12-10']],
   ] as const)('reajusta vencimientos de %s con frecuencia %s', async (type, frequency, weekDays, monthDays, expectedDates) => {
     mocks.dbQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes('FROM operacion_financiera o')) return { rows: [{ idoperacion_financiera: 42, tipo: type, cantidad_cuotas: 3, frecuencia: frequency, idprestamo: type === 'PRESTAMO' ? 7 : null }] };
+      if (sql.includes('FROM operacion_financiera o')) return { rows: [{ idoperacion_financiera: 42, tipo: type, cantidad_cuotas: 3, frecuencia: frequency, idprestamo: null }] };
       if (sql.includes('FROM cuota q LEFT JOIN')) return { rows: [
         { idcuota: 1, numero: 1, estado: 'PAGADA', interes_pagado: '20', capital_pagado: '80' },
         { idcuota: 2, numero: 2, estado: 'VENCIDA', interes_pagado: '0', capital_pagado: '0' },
@@ -62,10 +62,16 @@ describe('edición de fecha de operación', () => {
     expect(updates).toHaveLength(1);
     expect(updates[0][1]).toEqual([expectedDates[1], 2]);
     expect(mocks.dbQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE operacion_financiera SET fecha_inicio'))).toBe(true);
-    expect(mocks.dbQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE prestamo SET fecha_desembolso'))).toBe(type === 'PRESTAMO');
+    expect(mocks.dbQuery.mock.calls.some(([sql]) => String(sql).includes('UPDATE prestamo SET fecha_desembolso'))).toBe(false);
     expect(mocks.dbQuery.mock.calls.every(([sql]) => !String(sql).includes('movimiento_caja'))).toBe(true);
     expect(mocks.dbQuery.mock.calls.find(([sql]) => String(sql).includes('FROM operacion_financiera o'))?.[0]).toContain('FOR UPDATE OF o');
     expect(mocks.dbQuery.mock.calls.find(([sql]) => String(sql).includes('FROM cuota q LEFT JOIN'))?.[0]).toContain('FOR UPDATE OF q');
+  });
+
+  it('los préstamos deben usar el reemplazo para editar la fecha', async () => {
+    mocks.dbQuery.mockResolvedValue({rows:[{idoperacion_financiera:42,tipo:'PRESTAMO'}]});
+    expect((await changeDate('25/09/2026')).status).toBe(409);
+    expect(mocks.dbQuery.mock.calls).toHaveLength(1);
   });
 
   it('rechaza una fecha imposible antes de iniciar la transacción', async () => {

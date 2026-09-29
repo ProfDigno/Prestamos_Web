@@ -5,6 +5,7 @@ import { api, money, shortDate } from "./api";
 import { displayDateToIso, isoDateToDisplay } from "./dateUtils";
 import { openWhatsApp } from "./whatsapp";
 import { formatIntegerAmount, formatIntegerAmountInput } from "./amountInput";
+import { EditLoanButton } from "./LoanEditing";
 
 function formatInterestPercentage(value: string | number | null | undefined) {
   const numeric = Number(value);
@@ -185,6 +186,7 @@ export default function OperationDetailSelectable() {
         <div>
           <p className="eyebrow">NM CREDITOS</p>
           <h1>{data.nombre_completo}</h1>
+          <EditLoanButton operation={data} />
           <p className="muted">
             {data.tipo === "PRESTAMO" ? "Préstamo" : "Venta financiada"} ·{" "}
             {data.frecuencia}
@@ -305,7 +307,7 @@ export default function OperationDetailSelectable() {
             <dt>Cédula</dt>
             <dd>{data.cedula}</dd>
             <dt>Fecha de inicio</dt>
-            <dd className="operation-start-date"><span>{shortDate(data.fecha_inicio)}</span><button type="button" className="button tiny secondary" onClick={openDateEditor}>Editar fecha</button></dd>
+            <dd className="operation-start-date"><span>{shortDate(data.fecha_inicio)}</span>{data.tipo==='PRESTAMO' ? <EditLoanButton operation={data} label="Editar fecha" /> : <button type="button" className="button tiny secondary" onClick={openDateEditor}>Editar fecha</button>}</dd>
             <dt>Tasa de interés</dt>
             <dd>{formatInterestPercentage(data.porcentaje_interes)}%</dd>
             <dt>Estado</dt>
