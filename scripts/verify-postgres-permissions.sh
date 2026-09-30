@@ -32,7 +32,7 @@ PERMISSIONS="$(sudo -u postgres psql -At -v app_user="$DB_USER" --dbname="$DB_NA
 SELECT has_table_privilege(:'app_user', 'prestamo_reemplazo', 'INSERT') || '|' || has_table_privilege(:'app_user', 'pago_reemplazo', 'INSERT') || '|' || has_table_privilege(:'app_user', 'descuento_reemplazo', 'INSERT');
 SQL
 )"
-if [[ "$PERMISSIONS" != "t|t|t" ]]; then
+if [[ "$PERMISSIONS" != "true|true|true" ]]; then
   echo "Faltan permisos de inserción para $DB_USER: $PERMISSIONS" >&2
   exit 1
 fi
