@@ -10,6 +10,7 @@
     "db:seed": "npm run db:seed -w server",
     "db:cleanup-demo": "npm run db:cleanup-demo -w server",
     "db:cleanup-all": "npm run db:cleanup-all -w server",
+    "db:verify-permissions": "bash scripts/verify-postgres-permissions.sh",
     "cert:generate": "npm run cert:generate -w server",
     "test": "npm run test -w server && npm run test -w client"
   },
