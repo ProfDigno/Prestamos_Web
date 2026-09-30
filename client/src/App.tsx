@@ -1740,11 +1740,14 @@ export function NewOperation({ sale = false, editId, onDone, onCancel }: { sale?
   },[editId]);
   const visibleClients = useMemo(() => {
     const query = normalizeSearchText(clientSearch.trim());
-    if (!query) return clients;
-    return clients.filter((client) =>
+    const filtered = !query ? clients : clients.filter((client) =>
       normalizeSearchText(`${client.nombre_completo} ${client.cedula}`).includes(query),
     );
-  }, [clients, clientSearch]);
+    const selected = clients.find((client) => String(client.idcliente) === String(data.fk_idcliente));
+    return selected && !filtered.some((client) => client.idcliente === selected.idcliente)
+      ? [selected, ...filtered]
+      : filtered;
+  }, [clients, clientSearch, data.fk_idcliente]);
   const total = useMemo(() => Number(data.monto_capital || 0) + Number(data.monto_interes || 0), [data]);
   const installmentsPreview = useMemo(
     () => calculatePreviewInstallments(data.monto_capital, data.monto_interes, data.cantidad_cuotas),
@@ -1967,18 +1970,19 @@ export function NewOperation({ sale = false, editId, onDone, onCancel }: { sale?
                 const client = clients.find(
                   (c) => String(c.idcliente) === value,
                 );
-                setData({
-                  ...data,
+                setData((current: any) => ({
+                  ...current,
                   fk_idcliente: value,
                   porcentaje_interes:
                     client?.tasa_interes_sugerida != null
                       ? normalizeDecimalInput(String(client.tasa_interes_sugerida), 3)
-                      : data.porcentaje_interes,
+                      : current.porcentaje_interes,
                   monto_interes:
-                    client?.tasa_interes_sugerida != null && data.monto_capital
-                      ? roundedAmount(Number(data.monto_capital) * Number(client.tasa_interes_sugerida) / 100)
-                      : data.monto_interes,
-                });
+                    client?.tasa_interes_sugerida != null && current.monto_capital
+                      ? roundedAmount(Number(current.monto_capital) * Number(client.tasa_interes_sugerida) / 100)
+                      : current.monto_interes,
+                }));
+                setClientSearch("");
                 setInterestMode("PORCENTAJE");
               }}
             >

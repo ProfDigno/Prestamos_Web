@@ -60,4 +60,16 @@ describe('edición de préstamos',()=>{
     fireEvent.click(screen.getByRole('button',{name:'Aceptar y crear'}));await waitFor(()=>expect(done).toHaveBeenCalledWith(99));
     expect(api.mock.calls.some(([url])=>url==='/api/operaciones/prestamos')).toBe(true);
   });
+  it('envía el cliente seleccionado después de filtrarlo por búsqueda',async()=>{
+    mockApi();const done=vi.fn();render(<MemoryRouter><NewOperation onDone={done}/></MemoryRouter>);
+    await waitFor(()=>expect((screen.getByLabelText('Cliente') as HTMLSelectElement).value).toBe('1'));
+    fireEvent.change(screen.getByLabelText('Buscar cliente por nombre o cédula'),{target:{value:'Cliente Dos'}});
+    fireEvent.change(screen.getByLabelText('Cliente'),{target:{value:'2'}});
+    expect((screen.getByLabelText('Cliente') as HTMLSelectElement).value).toBe('2');
+    fireEvent.click(screen.getByRole('button',{name:'Crear préstamo y generar cuotas'}));
+    fireEvent.click(screen.getByRole('button',{name:'Aceptar y crear'}));
+    await waitFor(()=>expect(done).toHaveBeenCalledWith(99));
+    const [,options]=api.mock.calls.find(([url])=>url==='/api/operaciones/prestamos')!;
+    expect(JSON.parse(options.body).fk_idcliente).toBe(2);
+  });
 });
