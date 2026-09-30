@@ -26,15 +26,12 @@ GRANT USAGE, SELECT, UPDATE
   ON SEQUENCE prestamo_reemplazo_idprestamo_reemplazo_seq
   TO :"app_user";
 
-DO $$
-BEGIN
-  IF NOT has_table_privilege(:'app_user', 'prestamo_reemplazo', 'INSERT')
-     OR NOT has_table_privilege(:'app_user', 'pago_reemplazo', 'INSERT')
-     OR NOT has_table_privilege(:'app_user', 'descuento_reemplazo', 'INSERT') THEN
-    RAISE EXCEPTION 'Faltan permisos de inserción para %', :'app_user';
-  END IF;
-END
-$$;
 SQL
+
+PERMISSIONS="$(sudo -u postgres psql -At -v app_user="$DB_USER" --dbname="$DB_NAME" -c "SELECT has_table_privilege(:'app_user', 'prestamo_reemplazo', 'INSERT') || '|' || has_table_privilege(:'app_user', 'pago_reemplazo', 'INSERT') || '|' || has_table_privilege(:'app_user', 'descuento_reemplazo', 'INSERT');")"
+if [[ "$PERMISSIONS" != "t|t|t" ]]; then
+  echo "Faltan permisos de inserción para $DB_USER: $PERMISSIONS" >&2
+  exit 1
+fi
 
 echo "Permisos PostgreSQL verificados para $DB_USER en $DB_NAME"
