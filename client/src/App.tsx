@@ -1186,8 +1186,10 @@ function OperationDetail() {
 }
 
 function Clients() {
+  const PAGE_SIZE = 50;
   const [rows, setRows] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
   const [modal, setModal] = useState<"new" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -1198,8 +1200,14 @@ function Clients() {
   const load = () =>
     api<any[]>(`/api/clientes?q=${encodeURIComponent(q)}`).then(setRows);
   useEffect(() => {
+    setPage(1);
     load();
   }, [q]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = rows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const firstRow = rows.length ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
+  const lastRow = Math.min(currentPage * PAGE_SIZE, rows.length);
   useEffect(() => {
     if (selectedClientId == null) {
       setClientOperations([]);
@@ -1261,7 +1269,7 @@ function Clients() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {pageRows.map((r) => (
               <tr key={r.idcliente} className={`selectable-row${selectedClientId === r.idcliente ? " selected-row" : ""}${!r.activo ? " product-inactive" : ""}`} onClick={() => setSelectedClientId(r.idcliente)}>
                 <td>
                   <strong>{r.nombre_completo}</strong>
@@ -1278,9 +1286,18 @@ function Clients() {
                 <td><label className="product-active-toggle"><input type="checkbox" checked={Boolean(r.activo)} onChange={() => toggle(r)} onClick={(e) => e.stopPropagation()} aria-label={`${r.activo ? "Desactivar" : "Activar"} ${r.nombre_completo}`} /><span>{r.activo ? "Activo" : "Inactivo"}</span></label></td>
               </tr>
             ))}
+            {!pageRows.length && <tr><td colSpan={8} className="empty">No hay clientes coincidentes.</td></tr>}
           </tbody>
         </table>
       </section>
+      <div className="pagination" aria-label="Paginación de clientes">
+        <span>Mostrando {firstRow}-{lastRow} de {rows.length} clientes</span>
+        <div className="pagination-actions">
+          <button className="button secondary" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage <= 1}>Anterior</button>
+          <span>Página {currentPage} de {totalPages}</span>
+          <button className="button secondary" onClick={() => setPage((value) => Math.min(totalPages, value + 1))} disabled={currentPage >= totalPages}>Siguiente</button>
+        </div>
+      </div>
       {selectedClientId != null && <section className="panel client-operations-panel">
         <div className="section-head">
           <div>
